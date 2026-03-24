@@ -10,6 +10,8 @@ export interface OpenAIStreamOptions {
   provider: ProviderConfig;
   onChunk?: (content: string, done: boolean) => void;
   onError?: (error: Error) => void;
+  // Phase 2 - Feature 1: 串行互相引用
+  opponentMessage?: Message; // 对方当前轮次的输出（如果是串行模式）
 }
 
 export interface OpenAIResponse {
@@ -24,7 +26,7 @@ export interface OpenAIResponse {
 export async function streamOpenAIResponse(
   options: OpenAIStreamOptions
 ): Promise<OpenAIResponse> {
-  const { messages, provider, onChunk, onError } = options;
+  const { messages, provider, onChunk, onError, opponentMessage } = options;
 
   // 构建API请求
   const baseUrl = provider.baseUrl || 'https://api.openai.com';
@@ -35,11 +37,42 @@ export async function streamOpenAIResponse(
     throw new Error('OpenAI API Key is required');
   }
 
+  // Phase 2 - Feature 1: 如果存在opponentMessage，添加系统消息
+  let systemMessage = '';
+  if (opponentMessage) {
+    const opponentName = opponentMessage.isClaude === true ? 'Claude' : '另一个AI';
+    systemMessage = `
+你正在参与一个AI对抗协议。
+
+**重要:** 另一个AI (${opponentName}) 在本轮已经给出了观点。
+
+**对方的观点：**
+"""
+${opponentMessage.content}
+"""
+
+**你的任务：**
+1. **仔细阅读对方的观点** — 理解它的核心论点
+2. **寻找问题** — 检查是否有事实错误、逻辑漏洞、遗漏要点
+3. **礼貌反驳或补充** — 如果发现问题，明确指出；如果没有，表示同意并补充你的视角
+
+**目标：** 找到真相，而不是赢得辩论。如果对方是对的，坦诚承认。
+`.trim();
+  }
+
   // 转换消息格式为OpenAI格式
   const openaiMessages = messages.map(m => ({
     role: m.role === 'user' ? 'user' : 'assistant',
     content: m.content,
   }));
+
+  // Phase 2 - Feature 1: 如果有系统消息，添加到消息列表开头
+  if (systemMessage) {
+    openaiMessages.unshift({
+      role: 'system',
+      content: systemMessage,
+    });
+  }
 
   const requestBody = {
     model,

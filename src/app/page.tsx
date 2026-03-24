@@ -3,6 +3,12 @@
 import { useState, useEffect } from 'react';
 import MainLayout from '@/components/MainLayout';
 import SettingsPanel from '@/components/SettingsPanel';
+import AuditDashboard from '@/components/AuditDashboard';
+import SerialModePanel from '@/components/SerialModePanel';
+import AutoChallengePanel from '@/components/AutoChallengePanel';
+import AutoChallengeConfigPanel from '@/components/AutoChallengeConfigPanel';
+import MultiAIConfigPanel from '@/components/MultiAIConfigPanel';
+import VotingResultPanel from '@/components/VotingResultPanel';
 import { useAppStore, useDebateState, useIsStreaming } from '@/lib/store';
 import { Message } from '@/lib/types';
 import { loadConversation } from '@/lib/conversation-store';
@@ -13,6 +19,8 @@ export default function Home() {
   const [isLoaded, setIsLoaded] = useState(false);
   const [configSynced, setConfigSynced] = useState(false);
   const [showConfigTip, setShowConfigTip] = useState(false);
+  const [autoChallenges, setAutoChallenges] = useState<any[]>([]); // 自动挑刺结果
+  const [showVotingResult, setShowVotingResult] = useState(false); // 是否显示投票结果
 
   const {
     addMessage,
@@ -25,6 +33,17 @@ export default function Home() {
     isSettingsOpen,
     openSettings,
     closeSettings,
+    serialConfig,
+    updateSerialConfig,
+    autoChallengeConfig,
+    updateAutoChallengeConfig,
+    addChallenge,
+    aiProviders,
+    updateAIProviders,
+    votingConfig,
+    updateVotingConfig,
+    votingResult,
+    setVotingResult,
   } = useAppStore();
 
   const debateState = useDebateState();
@@ -176,7 +195,7 @@ export default function Home() {
 
             const result = await Promise.race([
               reader!.read(),
-              new Promise((_, reject) =>
+              new Promise<never>((_, reject) =>
                 setTimeout(() => reject(new Error('Read timeout')), 30000)
               )
             ]);
@@ -187,7 +206,7 @@ export default function Home() {
               continue;
             }
 
-            const { done, value } = result;
+            const { done, value } = result as ReadableStreamReadResult<Uint8Array>;
             lastChunkTime = Date.now();
 
             if (done) {
@@ -263,7 +282,7 @@ export default function Home() {
 
             const result = await Promise.race([
               reader!.read(),
-              new Promise((_, reject) =>
+              new Promise<never>((_, reject) =>
                 setTimeout(() => reject(new Error('Read timeout')), 30000)
               )
             ]);
@@ -274,7 +293,7 @@ export default function Home() {
               continue;
             }
 
-            const { done, value } = result;
+            const { done, value } = result as ReadableStreamReadResult<Uint8Array>;
             lastChunkTime = Date.now();
 
             if (done) {
@@ -348,6 +367,141 @@ export default function Home() {
       }
     } finally {
       setStreaming(false);
+
+      // Phase 2 - Feature 2: 自动挑刺 (在两个AI都完成后)
+      if (autoChallengeConfig.enabled && !setClaudeError && !setOpenAIError) {
+        try {
+          await triggerAutoChallenge();
+        } catch (error) {
+          console.error('Auto-challenge failed:', error);
+        }
+      }
+
+      // Phase 2 - Feature 4: 多AI投票 (在自动挑刺之后)
+      if (votingConfig.enabled && votingResult === undefined) {
+        try {
+          await triggerVoting();
+        } catch (error) {
+          console.error('Voting failed:', error);
+        }
+      }
+    }
+  };
+
+  /**
+   * 触发投票
+   */
+  const triggerVoting = async () => {
+    // 找到最新的Claude和OpenAI消息
+    const claudeMessage = debateState.messages
+      .filter(m => m.isClaude === true)
+      .slice(-1)[0];
+    const openaiMessage = debateState.messages
+      .filter(m => m.isClaude === false)
+      .slice(-1)[0];
+
+    if (!claudeMessage || !openaiMessage) {
+      console.log('Skipping voting: missing messages');
+      return;
+    }
+
+    // 检查是否有足够的AI启用
+    const enabledProviders = Object.entries(aiProviders)
+      .filter(([_, config]) => config.enabled)
+      .map(([id, _]) => id as any);
+
+    if (enabledProviders.length < 2) {
+      console.log('Skipping voting: need at least 2 AI providers');
+      return;
+    }
+
+    console.log('=== Triggering Multi-AI Voting ===');
+
+    try {
+      const response = await fetch('/api/voting', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messages: [claudeMessage, openaiMessage],
+          topic: {
+            id: `vote-${Date.now()}`,
+            type: 'best-answer',
+            description: '选择最好的回答',
+            options: [claudeMessage.id, openaiMessage.id],
+            createdAt: Date.now(),
+          },
+          providers: enabledProviders,
+          config: votingConfig,
+          context: question,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Voting API failed');
+      }
+
+      const data = await response.json();
+
+      if (data.success) {
+        console.log('Voting completed:', data.data);
+        setVotingResult(data.data.result);
+        setShowVotingResult(true);
+      }
+    } catch (error) {
+      console.error('Voting error:', error);
+    }
+  };
+
+  /**
+   * 触发自动挑刺
+   */
+  const triggerAutoChallenge = async () => {
+    // 找到最新的Claude和OpenAI消息
+    const claudeMessage = debateState.messages
+      .filter(m => m.isClaude === true)
+      .slice(-1)[0];
+    const openaiMessage = debateState.messages
+      .filter(m => m.isClaude === false)
+      .slice(-1)[0];
+
+    if (!claudeMessage || !openaiMessage) {
+      console.log('Skipping auto-challenge: missing messages');
+      return;
+    }
+
+    console.log('=== Triggering Auto-Challenge ===');
+
+    const response = await fetch('/api/auto-challenge', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        messageA: claudeMessage,
+        messageB: openaiMessage,
+        config: autoChallengeConfig,
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error('Auto-challenge API failed');
+    }
+
+    const data = await response.json();
+
+    if (data.success && data.data.challenges.length > 0) {
+      console.log('Auto-challenges found:', data.data.challenges.length);
+      setAutoChallenges(data.data.challenges);
+
+      // 将自动挑刺添加到debateState
+      data.data.challenges.forEach((challenge: any) => {
+        // 找到目标消息的索引
+        const targetIndex = debateState.messages.findIndex(m => m.id === challenge.targetMessageId);
+        if (targetIndex !== -1) {
+          challenge.messageIndex = targetIndex;
+          addChallenge(challenge);
+        }
+      });
+    } else {
+      setAutoChallenges([]);
     }
   };
 
@@ -384,14 +538,72 @@ export default function Home() {
       )}
 
       <MainLayout>
-        {/* 设置按钮 */}
-        <button
-          onClick={openSettings}
-          className="bg-gray-100 hover:bg-gray-200 text-gray-700 px-3 py-1.5 rounded-lg text-sm font-medium"
-        >
-          ⚙️ 设置
-        </button>
+        {/* 设置按钮和审计评分按钮 */}
+        <div className="flex gap-2">
+          <AuditDashboard />
+          <button
+            onClick={openSettings}
+            className="bg-gray-100 hover:bg-gray-200 text-gray-700 px-3 py-1.5 rounded-lg text-sm font-medium"
+          >
+            ⚙️ 设置
+          </button>
+        </div>
       </MainLayout>
+
+      {/* 串行模式面板 */}
+      <div className="max-w-7xl mx-auto px-4 pt-4">
+        <SerialModePanel
+          config={serialConfig}
+          onConfigChange={updateSerialConfig}
+          isLoading={isStreaming}
+          currentRound={debateState.currentRound}
+          firstResponder={debateState.firstResponder}
+        />
+      </div>
+
+      {/* 自动挑刺配置面板 */}
+      <div className="max-w-7xl mx-auto px-4 pb-4">
+        <AutoChallengeConfigPanel
+          config={autoChallengeConfig}
+          onConfigChange={updateAutoChallengeConfig}
+          isLoading={isStreaming}
+        />
+      </div>
+
+      {/* 多AI投票配置面板 */}
+      <div className="max-w-7xl mx-auto px-4 pb-4">
+        <MultiAIConfigPanel
+          providers={aiProviders}
+          votingConfig={votingConfig}
+          onProvidersChange={updateAIProviders}
+          onVotingConfigChange={updateVotingConfig}
+          isLoading={isStreaming}
+        />
+      </div>
+
+      {/* 自动挑刺面板 */}
+      {autoChallenges.length > 0 && (
+        <div className="max-w-7xl mx-auto px-4 pb-4">
+          <AutoChallengePanel
+            challenges={autoChallenges}
+            onChallengeAction={(challengeId, action) => {
+              console.log('Challenge action:', challengeId, action);
+              // TODO: 实现接受/拒绝/辩论逻辑
+            }}
+          />
+        </div>
+      )}
+
+      {/* 投票结果面板 */}
+      {showVotingResult && votingResult && (
+        <div className="max-w-7xl mx-auto px-4 pb-4">
+          <VotingResultPanel
+            result={votingResult}
+            messages={debateState.messages}
+            onClose={() => setShowVotingResult(false)}
+          />
+        </div>
+      )}
 
       {/* 输入区域 */}
       <div className="max-w-7xl mx-auto px-4 pb-6">

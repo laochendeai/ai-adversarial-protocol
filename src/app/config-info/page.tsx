@@ -45,8 +45,8 @@ export default function ConfigInfoPage() {
   }, []);
 
   const handleApplyConfig = () => {
-    if (!config) return;
-    syncServerConfig(config);
+    if (!config || !detected) return;
+    syncServerConfig({ ...config, detected });
     setApplied(true);
     setTimeout(() => setApplied(false), 3000);
   };

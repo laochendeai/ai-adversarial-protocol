@@ -10,6 +10,8 @@ export interface ClaudeStreamOptions {
   provider: ProviderConfig;
   onChunk?: (content: string, done: boolean) => void;
   onError?: (error: Error) => void;
+  // Phase 2 - Feature 1: 串行互相引用
+  opponentMessage?: Message; // 对方当前轮次的输出（如果是串行模式）
 }
 
 export interface ClaudeResponse {
@@ -24,7 +26,7 @@ export interface ClaudeResponse {
 export async function streamClaudeResponse(
   options: ClaudeStreamOptions
 ): Promise<ClaudeResponse> {
-  const { messages, provider, onChunk, onError } = options;
+  const { messages, provider, onChunk, onError, opponentMessage } = options;
 
   // 构建API请求
   const baseUrl = provider.baseUrl || 'https://api.anthropic.com';
@@ -35,18 +37,46 @@ export async function streamClaudeResponse(
     throw new Error('Claude API Key is required');
   }
 
+  // Phase 2 - Feature 1: 如果存在opponentMessage，修改系统提示
+  let systemPrompt = '';
+  if (opponentMessage) {
+    const opponentName = opponentMessage.isClaude === false ? 'OpenAI' : '另一个AI';
+    systemPrompt = `
+你正在参与一个AI对抗协议。
+
+**重要:** 另一个AI (${opponentName}) 在本轮已经给出了观点。
+
+**对方的观点：**
+"""
+${opponentMessage.content}
+"""
+
+**你的任务：**
+1. **仔细阅读对方的观点** — 理解它的核心论点
+2. **寻找问题** — 检查是否有事实错误、逻辑漏洞、遗漏要点
+3. **礼貌反驳或补充** — 如果发现问题，明确指出；如果没有，表示同意并补充你的视角
+
+**目标：** 找到真相，而不是赢得辩论。如果对方是对的，坦诚承认。
+`.trim();
+  }
+
   // 转换消息格式为Claude格式
   const claudeMessages = messages.map(m => ({
     role: m.role === 'user' ? 'user' : 'assistant',
     content: m.content,
   }));
 
-  const requestBody = {
+  const requestBody: any = {
     model,
     messages: claudeMessages,
     stream: true,
     max_tokens: 4096,
   };
+
+  // Phase 2 - Feature 1: 添加系统提示（如果是串行模式）
+  if (systemPrompt) {
+    requestBody.system = systemPrompt;
+  }
 
   let fullContent = '';
   let inputTokens = 0;

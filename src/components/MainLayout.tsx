@@ -4,6 +4,8 @@ import { useState } from 'react';
 import { useDebateState, useErrors, useSettings, useAppStore } from '@/lib/store';
 import { useEffect, useRef } from 'react';
 import ChallengeForm from './ChallengeForm';
+import ThinkingBlockDisplay from './ThinkingBlock';
+import { parseThinkingBlocks, removeThinkingTags } from '@/lib/features/thinking-visualization';
 
 interface MainLayoutProps {
   children?: React.ReactNode;
@@ -121,9 +123,24 @@ export default function MainLayout({ children }: MainLayoutProps) {
                   .filter((m) => m.isClaude === true)
                   .map((msg, idx) => {
                     const globalIndex = debateState.messages.findIndex(m => m.id === msg.id);
+
+                    // Phase 2 - Feature 3: 解析thinking块
+                    const thinkingBlocks = parseThinkingBlocks(msg.content, msg.id);
+                    const cleanContent = removeThinkingTags(msg.content);
+
                     return (
                       <div key={msg.id} className="mb-4 group">
-                        <div className="text-sm text-gray-600 whitespace-pre-wrap">{msg.content}</div>
+                        {/* 显示thinking块 */}
+                        {thinkingBlocks.length > 0 && thinkingBlocks.map((block) => (
+                          <ThinkingBlockDisplay
+                            key={block.id}
+                            block={block}
+                            displayMode="inline"
+                          />
+                        ))}
+
+                        {/* 显示清理后的内容 */}
+                        <div className="text-sm text-gray-600 whitespace-pre-wrap">{cleanContent}</div>
                         <button
                           onClick={() => handleOpenChallenge(globalIndex)}
                           className="mt-2 text-xs text-yellow-600 hover:text-yellow-800 opacity-0 group-hover:opacity-100 transition-opacity"
@@ -160,9 +177,24 @@ export default function MainLayout({ children }: MainLayoutProps) {
                   .filter((m) => m.isClaude === false)
                   .map((msg) => {
                     const globalIndex = debateState.messages.findIndex(m => m.id === msg.id);
+
+                    // Phase 2 - Feature 3: 解析thinking块
+                    const thinkingBlocks = parseThinkingBlocks(msg.content, msg.id);
+                    const cleanContent = removeThinkingTags(msg.content);
+
                     return (
                       <div key={msg.id} className="mb-4 group">
-                        <div className="text-sm text-gray-600 whitespace-pre-wrap">{msg.content}</div>
+                        {/* 显示thinking块 */}
+                        {thinkingBlocks.length > 0 && thinkingBlocks.map((block) => (
+                          <ThinkingBlockDisplay
+                            key={block.id}
+                            block={block}
+                            displayMode="inline"
+                          />
+                        ))}
+
+                        {/* 显示清理后的内容 */}
+                        <div className="text-sm text-gray-600 whitespace-pre-wrap">{cleanContent}</div>
                         <button
                           onClick={() => handleOpenChallenge(globalIndex)}
                           className="mt-2 text-xs text-yellow-600 hover:text-yellow-800 opacity-0 group-hover:opacity-100 transition-opacity"

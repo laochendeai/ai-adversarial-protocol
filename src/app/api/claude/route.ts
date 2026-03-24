@@ -16,6 +16,8 @@ interface ChatRequestBody {
     messages: Message[];
   };
   provider?: Partial<ProviderConfig>; // 可选的provider覆盖
+  // Phase 2 - Feature 1: 串行互相引用
+  opponentMessage?: Message; // 对方当前轮次的输出（如果是串行模式）
 }
 
 export async function POST(request: NextRequest) {
@@ -36,7 +38,18 @@ export async function POST(request: NextRequest) {
       {
         id: `user-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
         role: 'user',
-        content: question,
+        content: `在这个AI对抗协议中，请使用 <thinking> 标签展示你的推理过程。
+
+格式示例：
+<thinking>
+1. 分析用户的问题
+2. 识别关键概念
+3. 我的策略
+4. 需要注意的问题
+</thinking>
+
+你的回答：
+${question}`,
         timestamp: Date.now(),
       },
     ];

@@ -5,9 +5,10 @@
 
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { DebateState, Message, Challenge, AppSettings, ProviderConfig } from './types';
+import { DebateState, Message, Challenge, AppSettings, ProviderConfig, AuditState, AuditMetrics, SerialReferenceConfig, AutoChallengeConfig, AIProvider, AIProviderConfig, VotingConfig, VotingResult } from './types';
 import { getClientConfig, saveSettings, DEFAULT_SETTINGS } from './config';
 import { saveConversation, clearConversation as clearConv } from './conversation-store';
+import { getMetrics, updateMetrics, recordMessage, recordChallenge, recordChallengeOutcome, createInitialMetrics } from './features/audit-metrics';
 
 interface AppState {
   // Debate状态
@@ -39,6 +40,28 @@ interface AppState {
   isSettingsOpen: boolean;
   openSettings: () => void;
   closeSettings: () => void;
+
+  // 审计质量评分 (Phase 2 - Feature 5)
+  auditState: AuditState;
+  loadAuditState: () => void;
+  updateAuditMetrics: (aiId: 'claude' | 'openai', action: 'message' | 'challenge' | 'outcome', data?: any) => void;
+  clearAuditData: () => void;
+
+  // 串行引用配置 (Phase 2 - Feature 1)
+  serialConfig: SerialReferenceConfig;
+  updateSerialConfig: (config: SerialReferenceConfig) => void;
+
+  // 自动挑刺配置 (Phase 2 - Feature 2)
+  autoChallengeConfig: AutoChallengeConfig;
+  updateAutoChallengeConfig: (config: AutoChallengeConfig) => void;
+
+  // 多AI投票配置 (Phase 2 - Feature 4)
+  aiProviders: Record<AIProvider, AIProviderConfig>;
+  votingConfig: VotingConfig;
+  votingResult?: VotingResult;
+  updateAIProviders: (providers: Record<AIProvider, AIProviderConfig>) => void;
+  updateVotingConfig: (config: VotingConfig) => void;
+  setVotingResult: (result: VotingResult | undefined) => void;
 }
 
 export const useAppStore = create<AppState>()(
@@ -55,6 +78,70 @@ export const useAppStore = create<AppState>()(
         },
       },
 
+      // 初始审计状态
+      auditState: {
+        metrics: {},
+        history: [],
+      },
+
+      // 初始串行配置 (Phase 2 - Feature 1)
+      serialConfig: {
+        enabled: false,
+        mode: 'always-serial',
+        firstResponder: 'auto',
+      },
+
+      // 初始自动挑刺配置 (Phase 2 - Feature 2)
+      autoChallengeConfig: {
+        enabled: false,
+        threshold: 0.7,
+        maxChallengesPerRound: 3,
+        allowSelfChallenge: false,
+      },
+
+      // 初始AI Providers配置 (Phase 2 - Feature 4)
+      aiProviders: {
+        claude: {
+          id: 'claude',
+          name: 'Claude',
+          enabled: true,
+          type: 'anthropic',
+          weight: 1.0,
+        },
+        openai: {
+          id: 'openai',
+          name: 'OpenAI',
+          enabled: true,
+          type: 'openai',
+          weight: 1.0,
+        },
+        gemini: {
+          id: 'gemini',
+          name: 'Gemini',
+          enabled: false,
+          type: 'google',
+          weight: 1.0,
+        },
+        local: {
+          id: 'local',
+          name: 'Local AI',
+          enabled: false,
+          type: 'ollama',
+          weight: 0.5,
+        },
+      },
+
+      // 初始投票配置 (Phase 2 - Feature 4)
+      votingConfig: {
+        enabled: false,
+        mode: 'majority',
+        threshold: 0.5,
+        tiebreaker: 'first',
+        allowSelfVote: false,
+      },
+
+      votingResult: undefined,
+
       // Debate状态操作
       addMessage: (message) =>
         set((state) => {
@@ -64,6 +151,26 @@ export const useAppStore = create<AppState>()(
           };
           // 自动保存到LocalStorage
           saveConversation(newState);
+
+          // 自动记录到审计系统 (Phase 2 - Feature 5)
+          if (message.role === 'assistant' && message.isClaude !== undefined) {
+            const aiId = message.isClaude ? 'claude' : 'openai';
+            const metrics = state.auditState.metrics[aiId] || createInitialMetrics(aiId);
+            const updatedMetrics = recordMessage(metrics);
+            updateMetrics(aiId, updatedMetrics);
+
+            return {
+              debateState: newState,
+              auditState: {
+                ...state.auditState,
+                metrics: {
+                  ...state.auditState.metrics,
+                  [aiId]: updatedMetrics,
+                },
+              },
+            };
+          }
+
           return { debateState: newState };
         }),
 
@@ -170,12 +277,88 @@ export const useAppStore = create<AppState>()(
       openSettings: () => set({ isSettingsOpen: true }),
 
       closeSettings: () => set({ isSettingsOpen: false }),
+
+      // 审计质量评分操作
+      loadAuditState: () => {
+        const { loadAuditState: loadState } = require('./features/audit-metrics');
+        const auditState = loadState();
+        set({ auditState });
+      },
+
+      updateAuditMetrics: (aiId, action, data) => {
+        set((state) => {
+          const metrics = state.auditState.metrics[aiId] || require('./features/audit-metrics').createInitialMetrics(aiId);
+
+          let updatedMetrics = metrics;
+
+          if (action === 'message') {
+            updatedMetrics = recordMessage(metrics);
+          } else if (action === 'challenge') {
+            updatedMetrics = recordChallenge(metrics, data);
+          } else if (action === 'outcome') {
+            updatedMetrics = recordChallengeOutcome(metrics, data);
+          }
+
+          updateMetrics(aiId, updatedMetrics);
+
+          return {
+            auditState: {
+              ...state.auditState,
+              metrics: {
+                ...state.auditState.metrics,
+                [aiId]: updatedMetrics,
+              },
+            },
+          };
+        });
+      },
+
+      clearAuditData: () => {
+        const { clearAuditData: clearData } = require('./features/audit-metrics');
+        clearData();
+        set({
+          auditState: {
+            metrics: {},
+            history: [],
+          },
+        });
+      },
+
+      // 串行引用配置操作 (Phase 2 - Feature 1)
+      updateSerialConfig: (newConfig) =>
+        set((state) => ({
+          serialConfig: { ...state.serialConfig, ...newConfig },
+        })),
+
+      // 自动挑刺配置操作 (Phase 2 - Feature 2)
+      updateAutoChallengeConfig: (newConfig) =>
+        set((state) => ({
+          autoChallengeConfig: { ...state.autoChallengeConfig, ...newConfig },
+        })),
+
+      // 多AI投票配置操作 (Phase 2 - Feature 4)
+      updateAIProviders: (newProviders) =>
+        set((state) => ({
+          aiProviders: { ...state.aiProviders, ...newProviders },
+        })),
+
+      updateVotingConfig: (newConfig) =>
+        set((state) => ({
+          votingConfig: { ...state.votingConfig, ...newConfig },
+        })),
+
+      setVotingResult: (result) =>
+        set({ votingResult: result }),
     }),
     {
       name: 'ai-adversarial-storage',
       // 只持久化settings和部分UI状态，不持久化debateState（每次会话重新开始）
       partialize: (state) => ({
         settings: state.settings,
+        serialConfig: state.serialConfig, // Phase 2 - Feature 1
+        autoChallengeConfig: state.autoChallengeConfig, // Phase 2 - Feature 2
+        aiProviders: state.aiProviders, // Phase 2 - Feature 4
+        votingConfig: state.votingConfig, // Phase 2 - Feature 4
       }),
     }
   )
