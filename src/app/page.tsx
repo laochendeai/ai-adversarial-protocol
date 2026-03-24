@@ -162,40 +162,73 @@ export default function Home() {
         let buffer = '';
         let fullContent = '';
         let chunkCount = 0;
+        let lastChunkTime = Date.now();
+        const CHUNK_TIMEOUT = 30000; // 30秒超时
 
-        while (true) {
-          const { done, value } = await reader!.read();
-          if (done) {
-            console.log(`=== Claude stream done, total chunks: ${chunkCount}, content length: ${fullContent.length} ===`);
-            break;
-          }
+        try {
+          while (true) {
+            // 检查超时
+            if (Date.now() - lastChunkTime > CHUNK_TIMEOUT) {
+              console.error('Claude stream timeout after', CHUNK_TIMEOUT, 'ms');
+              setClaudeError('响应超时');
+              break;
+            }
 
-          chunkCount++;
-          if (chunkCount % 10 === 0) {
-            console.log(`Claude: received chunk ${chunkCount}, buffer size: ${buffer.length}`);
-          }
+            const result = await Promise.race([
+              reader!.read(),
+              new Promise((_, reject) =>
+                setTimeout(() => reject(new Error('Read timeout')), 30000)
+              )
+            ]);
 
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split('\n');
-          buffer = lines.pop() || '';
+            if (result instanceof Error) {
+              // 读取超时，尝试继续读取（可能服务器还在处理）
+              console.warn('Claude read timeout, retrying...');
+              continue;
+            }
 
-          for (const line of lines) {
-            if (line.startsWith('data: ')) {
-              try {
-                const data = JSON.parse(line.slice(6));
-                if (data.error) {
-                  console.error('Claude error:', data.error);
-                  setClaudeError(data.error);
-                } else if (data.content) {
-                  fullContent += data.content;
-                  // 实时更新 MainLayout 中的消息
-                  updateMessage(claudeMessageId, fullContent);
+            const { done, value } = result;
+            lastChunkTime = Date.now();
+
+            if (done) {
+              console.log(`=== Claude stream done, total chunks: ${chunkCount}, content length: ${fullContent.length} ===`);
+              break;
+            }
+
+            chunkCount++;
+            if (chunkCount === 1) {
+              console.log('Claude: received first chunk, size:', value.length);
+            }
+            if (chunkCount % 10 === 0) {
+              console.log(`Claude: received chunk ${chunkCount}, buffer size: ${buffer.length}, content length: ${fullContent.length}`);
+            }
+
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop() || '';
+
+            for (const line of lines) {
+              if (line.trim() === '') continue;
+              if (line.startsWith('data: ')) {
+                try {
+                  const data = JSON.parse(line.slice(6));
+                  if (data.error) {
+                    console.error('Claude error:', data.error);
+                    setClaudeError(data.error);
+                  } else if (data.content) {
+                    fullContent += data.content;
+                    // 实时更新 MainLayout 中的消息
+                    updateMessage(claudeMessageId, fullContent);
+                  }
+                } catch (e) {
+                  console.error('Parse error:', e, 'Line:', line);
                 }
-              } catch (e) {
-                console.error('Parse error:', e, 'Line:', line);
               }
             }
           }
+        } catch (error) {
+          console.error('Claude stream error:', error);
+          setClaudeError(`Stream error: ${error instanceof Error ? error.message : 'Unknown error'}`);
         }
 
         // Claude streaming 完成
@@ -216,40 +249,73 @@ export default function Home() {
         let buffer = '';
         let fullContent = '';
         let chunkCount = 0;
+        let lastChunkTime = Date.now();
+        const CHUNK_TIMEOUT = 30000; // 30秒超时
 
-        while (true) {
-          const { done, value } = await reader!.read();
-          if (done) {
-            console.log(`=== OpenAI stream done, total chunks: ${chunkCount}, content length: ${fullContent.length} ===`);
-            break;
-          }
+        try {
+          while (true) {
+            // 检查超时
+            if (Date.now() - lastChunkTime > CHUNK_TIMEOUT) {
+              console.error('OpenAI stream timeout after', CHUNK_TIMEOUT, 'ms');
+              setOpenAIError('响应超时');
+              break;
+            }
 
-          chunkCount++;
-          if (chunkCount % 10 === 0) {
-            console.log(`OpenAI: received chunk ${chunkCount}, buffer size: ${buffer.length}`);
-          }
+            const result = await Promise.race([
+              reader!.read(),
+              new Promise((_, reject) =>
+                setTimeout(() => reject(new Error('Read timeout')), 30000)
+              )
+            ]);
 
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split('\n');
-          buffer = lines.pop() || '';
+            if (result instanceof Error) {
+              // 读取超时，尝试继续读取（可能服务器还在处理）
+              console.warn('OpenAI read timeout, retrying...');
+              continue;
+            }
 
-          for (const line of lines) {
-            if (line.startsWith('data: ')) {
-              try {
-                const data = JSON.parse(line.slice(6));
-                if (data.error) {
-                  console.error('OpenAI error:', data.error);
-                  setOpenAIError(data.error);
-                } else if (data.content) {
-                  fullContent += data.content;
-                  // 实时更新 MainLayout 中的消息
-                  updateMessage(openaiMessageId, fullContent);
+            const { done, value } = result;
+            lastChunkTime = Date.now();
+
+            if (done) {
+              console.log(`=== OpenAI stream done, total chunks: ${chunkCount}, content length: ${fullContent.length} ===`);
+              break;
+            }
+
+            chunkCount++;
+            if (chunkCount === 1) {
+              console.log('OpenAI: received first chunk, size:', value.length);
+            }
+            if (chunkCount % 10 === 0) {
+              console.log(`OpenAI: received chunk ${chunkCount}, buffer size: ${buffer.length}, content length: ${fullContent.length}`);
+            }
+
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop() || '';
+
+            for (const line of lines) {
+              if (line.trim() === '') continue;
+              if (line.startsWith('data: ')) {
+                try {
+                  const data = JSON.parse(line.slice(6));
+                  if (data.error) {
+                    console.error('OpenAI error:', data.error);
+                    setOpenAIError(data.error);
+                  } else if (data.content) {
+                    fullContent += data.content;
+                    // 实时更新 MainLayout 中的消息
+                    updateMessage(openaiMessageId, fullContent);
+                  }
+                } catch (e) {
+                  console.error('Parse error:', e, 'Line:', line);
                 }
-              } catch (e) {
-                console.error('Parse error:', e, 'Line:', line);
               }
             }
           }
+        } catch (error) {
+          console.error('OpenAI stream error:', error);
+          setOpenAIError(`Stream error: ${error instanceof Error ? error.message : 'Unknown error'}`);
         }
 
         // OpenAI streaming 完成
