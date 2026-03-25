@@ -1,18 +1,41 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import MainLayout from '@/components/MainLayout';
-import SettingsPanel from '@/components/SettingsPanel';
-import AuditDashboard from '@/components/AuditDashboard';
-import SerialModePanel from '@/components/SerialModePanel';
-import AutoChallengePanel from '@/components/AutoChallengePanel';
-import AutoChallengeConfigPanel from '@/components/AutoChallengeConfigPanel';
-import MultiAIConfigPanel from '@/components/MultiAIConfigPanel';
-import VotingResultPanel from '@/components/VotingResultPanel';
+import { useState, useEffect, Suspense } from 'react';
+import dynamic from 'next/dynamic';
 import { useAppStore, useDebateState, useIsStreaming } from '@/lib/store';
 import { Message } from '@/lib/types';
 import { loadConversation } from '@/lib/conversation-store';
 import { autoApplyServerConfig } from '@/lib/config-sync';
+import MainLayout from '@/components/MainLayout';
+
+// Code splitting: Dynamic imports for heavy components
+const SettingsPanel = dynamic(() => import('@/components/SettingsPanel'), {
+  loading: () => <div className="px-4 py-2 text-gray-500">Loading settings...</div>,
+});
+
+const AuditDashboard = dynamic(() => import('@/components/AuditDashboard'), {
+  loading: () => <div className="bg-gray-100 px-3 py-1.5 rounded-lg text-sm">Loading audit...</div>,
+});
+
+const SerialModePanel = dynamic(() => import('@/components/SerialModePanel'), {
+  loading: () => <div className="bg-white rounded-lg shadow-md p-4">Loading serial mode...</div>,
+});
+
+const AutoChallengeConfigPanel = dynamic(() => import('@/components/AutoChallengeConfigPanel'), {
+  loading: () => <div className="bg-white rounded-lg shadow-md p-4">Loading auto-challenge config...</div>,
+});
+
+const MultiAIConfigPanel = dynamic(() => import('@/components/MultiAIConfigPanel'), {
+  loading: () => <div className="bg-white rounded-lg shadow-md p-4">Loading multi-AI config...</div>,
+});
+
+const AutoChallengePanel = dynamic(() => import('@/components/AutoChallengePanel'), {
+  loading: () => <div className="bg-white rounded-lg shadow-md p-4">Loading challenges...</div>,
+});
+
+const VotingResultPanel = dynamic(() => import('@/components/VotingResultPanel'), {
+  loading: () => <div className="bg-white rounded-lg shadow-md p-4">Loading voting results...</div>,
+});
 
 export default function Home() {
   const [question, setQuestion] = useState('');
@@ -540,7 +563,9 @@ export default function Home() {
       <MainLayout>
         {/* 设置按钮和审计评分按钮 */}
         <div className="flex gap-2">
-          <AuditDashboard />
+          <Suspense fallback={<div className="bg-gray-100 px-3 py-1.5 rounded-lg text-sm">Loading audit...</div>}>
+            <AuditDashboard />
+          </Suspense>
           <button
             onClick={openSettings}
             className="bg-gray-100 hover:bg-gray-200 text-gray-700 px-3 py-1.5 rounded-lg text-sm font-medium"
@@ -552,56 +577,66 @@ export default function Home() {
 
       {/* 串行模式面板 */}
       <div className="max-w-7xl mx-auto px-4 pt-4">
-        <SerialModePanel
-          config={serialConfig}
-          onConfigChange={updateSerialConfig}
-          isLoading={isStreaming}
-          currentRound={debateState.currentRound}
-          firstResponder={debateState.firstResponder}
-        />
+        <Suspense fallback={<div className="bg-white rounded-lg shadow-md p-4">Loading serial mode...</div>}>
+          <SerialModePanel
+            config={serialConfig}
+            onConfigChange={updateSerialConfig}
+            isLoading={isStreaming}
+            currentRound={debateState.currentRound}
+            firstResponder={debateState.firstResponder}
+          />
+        </Suspense>
       </div>
 
       {/* 自动挑刺配置面板 */}
       <div className="max-w-7xl mx-auto px-4 pb-4">
-        <AutoChallengeConfigPanel
-          config={autoChallengeConfig}
-          onConfigChange={updateAutoChallengeConfig}
-          isLoading={isStreaming}
-        />
+        <Suspense fallback={<div className="bg-white rounded-lg shadow-md p-4">Loading auto-challenge config...</div>}>
+          <AutoChallengeConfigPanel
+            config={autoChallengeConfig}
+            onConfigChange={updateAutoChallengeConfig}
+            isLoading={isStreaming}
+          />
+        </Suspense>
       </div>
 
       {/* 多AI投票配置面板 */}
       <div className="max-w-7xl mx-auto px-4 pb-4">
-        <MultiAIConfigPanel
-          providers={aiProviders}
-          votingConfig={votingConfig}
-          onProvidersChange={updateAIProviders}
-          onVotingConfigChange={updateVotingConfig}
-          isLoading={isStreaming}
-        />
+        <Suspense fallback={<div className="bg-white rounded-lg shadow-md p-4">Loading multi-AI config...</div>}>
+          <MultiAIConfigPanel
+            providers={aiProviders}
+            votingConfig={votingConfig}
+            onProvidersChange={updateAIProviders}
+            onVotingConfigChange={updateVotingConfig}
+            isLoading={isStreaming}
+          />
+        </Suspense>
       </div>
 
       {/* 自动挑刺面板 */}
       {autoChallenges.length > 0 && (
         <div className="max-w-7xl mx-auto px-4 pb-4">
-          <AutoChallengePanel
-            challenges={autoChallenges}
-            onChallengeAction={(challengeId, action) => {
-              console.log('Challenge action:', challengeId, action);
-              // TODO: 实现接受/拒绝/辩论逻辑
-            }}
-          />
+          <Suspense fallback={<div className="bg-white rounded-lg shadow-md p-4">Loading challenges...</div>}>
+            <AutoChallengePanel
+              challenges={autoChallenges}
+              onChallengeAction={(challengeId, action) => {
+                console.log('Challenge action:', challengeId, action);
+                // TODO: 实现接受/拒绝/辩论逻辑
+              }}
+            />
+          </Suspense>
         </div>
       )}
 
       {/* 投票结果面板 */}
       {showVotingResult && votingResult && (
         <div className="max-w-7xl mx-auto px-4 pb-4">
-          <VotingResultPanel
-            result={votingResult}
-            messages={debateState.messages}
-            onClose={() => setShowVotingResult(false)}
-          />
+          <Suspense fallback={<div className="bg-white rounded-lg shadow-md p-4">Loading voting results...</div>}>
+            <VotingResultPanel
+              result={votingResult}
+              messages={debateState.messages}
+              onClose={() => setShowVotingResult(false)}
+            />
+          </Suspense>
         </div>
       )}
 

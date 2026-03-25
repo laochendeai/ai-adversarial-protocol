@@ -15,6 +15,8 @@ export interface ProviderConfig {
 export interface AppSettings {
   claude: ProviderConfig;
   openai: ProviderConfig;
+  gemini: ProviderConfig;
+  local: ProviderConfig;
   sessionBudget?: number;  // 会话预算限制（美元）
 }
 

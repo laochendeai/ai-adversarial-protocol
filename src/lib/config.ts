@@ -107,6 +107,18 @@ export const DEFAULT_SETTINGS: AppSettings = {
     baseUrl: 'https://api.openai.com',
     model: 'gpt-4o',
   },
+  gemini: {
+    type: 'native',
+    apiKey: '',
+    baseUrl: 'https://generativelanguage.googleapis.com',
+    model: 'gemini-pro',
+  },
+  local: {
+    type: 'custom',
+    apiKey: '',  // Local AI通常不需要API key
+    baseUrl: 'http://localhost:11434',  // Ollama默认端口
+    model: 'llama3.2',  // 默认本地模型
+  },
   sessionBudget: 5.0,
 };
 
@@ -160,6 +172,18 @@ function getEnvConfig(): AppSettings {
       apiKey: getEnvOrFallback(process.env.OPENAI_API_KEY, autoDetected.openai?.apiKey || ''),
       baseUrl: getEnvOrFallback(process.env.OPENAI_BASE_URL, autoDetected.openai?.baseUrl || 'https://api.openai.com'),
       model: process.env.OPENAI_MODEL || autoDetected.openai?.model || 'gpt-4o',
+    },
+    gemini: {
+      type: 'native',
+      apiKey: getEnvOrFallback(process.env.GEMINI_API_KEY, ''),
+      baseUrl: getEnvOrFallback(process.env.GEMINI_BASE_URL, 'https://generativelanguage.googleapis.com'),
+      model: process.env.GEMINI_MODEL || 'gemini-pro',
+    },
+    local: {
+      type: 'custom',
+      apiKey: '',  // Local AI通常不需要API key
+      baseUrl: getEnvOrFallback(process.env.OLLAMA_URL, 'http://localhost:11434'),
+      model: process.env.OLLAMA_MODEL || 'llama3.2',
     },
     sessionBudget: process.env.SESSION_BUDGET
       ? parseFloat(process.env.SESSION_BUDGET)
@@ -283,6 +307,17 @@ export function validateSettings(settings: AppSettings): {
   const openaiValidation = validateProviderConfig(settings.openai);
   if (!openaiValidation.valid) {
     errors.push(...openaiValidation.errors.map(e => `OpenAI: ${e}`));
+  }
+
+  const geminiValidation = validateProviderConfig(settings.gemini);
+  if (!geminiValidation.valid) {
+    errors.push(...geminiValidation.errors.map(e => `Gemini: ${e}`));
+  }
+
+  // Local AI不需要API key验证（因为是本地的）
+  // 但baseUrl应该有值
+  if (!settings.local.baseUrl) {
+    errors.push('Local: Base URL is required for Local AI provider');
   }
 
   return {
