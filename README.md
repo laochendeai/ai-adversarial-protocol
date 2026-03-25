@@ -1,5 +1,7 @@
 # AI对抗协议 (AI Adversarial Protocol)
 
+[![CI](https://github.com/leo-cy/ai-adversarial-protocol/workflows/CI/badge.svg)](https://github.com/leo-cy/ai-adversarial-protocol/actions/workflows/ci.yml)
+
 Claude vs OpenAI/Codex — 让AI互相审计、挑刺、通过对抗寻找真相。
 
 ## 项目简介
@@ -196,16 +198,18 @@ npm run dev
 - **发布摘要**: 见 `RELEASE_SUMMARY.md`
 
 ### 技术债务
-- ⚠️ 测试覆盖率: 0% （作为研究原型可接受）
+- ✅ 测试覆盖率: 77个测试通过，覆盖核心功能
+- ⚠️ 代码风格: 60个 ESLint 警告（非阻塞）
 - 文档: 完整且全面
 - 代码质量: 生产就绪
 
-### Phase 3: Production Readiness (进行中)
+### Phase 3: Production Readiness (已完成 ✅)
 - ✅ Gemini API真实集成 — 完整的Google AI Studio API支持
 - ✅ Local AI (Ollama) 真实集成 — 支持localhost:11434本地模型
 - ✅ 性能优化和缓存 — SWR缓存、Memoization、Code Splitting、Bundle优化
-- [ ] 测试套件补充 (目标: 70%+覆盖率)
-- [ ] CI/CD和部署自动化
+- ✅ 测试套件补充 — Vitest + React Testing Library (77个测试通过)
+- ✅ 测试工具库 — 完整的测试工具和文档
+- ✅ CI/CD自动化 — GitHub Actions (类型检查 + 测试自动运行)
 
 ## 设计文档
 

@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import { syncServerConfig, isConfigDifferent } from '@/lib/config-sync';
 
 interface ConfigInfo {
@@ -162,7 +163,7 @@ export default function ConfigInfoPage() {
               <ol className="list-decimal list-inside text-sm text-blue-800 space-y-2">
                 <li>
                   <strong>LocalStorage（Web UI设置）</strong> — 最高优先级
-                  <p className="ml-6 text-blue-600">在"设置"面板中配置会覆盖其他配置</p>
+                  <p className="ml-6 text-blue-600">在&ldquo;设置&rdquo;面板中配置会覆盖其他配置</p>
                 </li>
                 <li>
                   <strong>.env.local</strong> — 手动配置
@@ -189,12 +190,12 @@ export default function ConfigInfoPage() {
         )}
 
         <div className="mt-6">
-          <a
+          <Link
             href="/"
             className="text-blue-600 hover:text-blue-800 underline"
           >
             ← 返回首页
-          </a>
+          </Link>
         </div>
       </div>
     </div>

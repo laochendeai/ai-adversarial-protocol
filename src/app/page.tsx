@@ -140,8 +140,8 @@ export default function Home() {
 
       // 创建消息ID
       const timestamp = Date.now();
-      let claudeMessageId = `${timestamp}-${Math.random().toString(36).substring(2, 9)}-claude`;
-      let openaiMessageId = `${timestamp + 1}-${Math.random().toString(36).substring(2, 9)}-openai`;
+      const claudeMessageId = `${timestamp}-${Math.random().toString(36).substring(2, 9)}-claude`;
+      const openaiMessageId = `${timestamp + 1}-${Math.random().toString(36).substring(2, 9)}-openai`;
 
       console.log('Claude message ID:', claudeMessageId);
       console.log('OpenAI message ID:', openaiMessageId);

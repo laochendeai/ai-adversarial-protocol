@@ -8,9 +8,6 @@ const nextConfig: NextConfig = {
 
   // === Production Optimizations ===
 
-  // Use SWC minification for faster builds
-  swcMinify: true,
-
   // Optimize package imports for smaller bundles
   modularizeImports: {
     'lodash-es': {

@@ -12,6 +12,8 @@ interface CacheEntry<T> {
 export class ServerCache<T> {
   private cache: Map<string, CacheEntry<T>> = new Map();
   private defaultTTL: number;
+  private hits = 0;
+  private misses = 0;
 
   constructor(defaultTTL: number = 60000) {
     // Default TTL: 60 seconds
@@ -25,6 +27,7 @@ export class ServerCache<T> {
     const entry = this.cache.get(key);
 
     if (!entry) {
+      this.misses++;
       return null;
     }
 
@@ -33,9 +36,11 @@ export class ServerCache<T> {
 
     if (isExpired) {
       this.cache.delete(key);
+      this.misses++;
       return null;
     }
 
+    this.hits++;
     return entry.data;
   }
 
@@ -69,6 +74,31 @@ export class ServerCache<T> {
    */
   clear(): void {
     this.cache.clear();
+    this.hits = 0;
+    this.misses = 0;
+  }
+
+  /**
+   * Get the number of entries in the cache
+   */
+  get size(): number {
+    return this.cache.size;
+  }
+
+  /**
+   * Get cache statistics
+   */
+  get stats(): { hits: number; misses: number } {
+    return { hits: this.hits, misses: this.misses };
+  }
+
+  /**
+   * Get cache hit rate (0-1)
+   */
+  get hitRate(): number {
+    const total = this.hits + this.misses;
+    if (total === 0) return 0;
+    return this.hits / total;
   }
 
   /**

@@ -157,7 +157,6 @@ export async function POST(request: NextRequest) {
     }
 
     // 3. 计算投票结果
-    const options = messages.map(m => m.id);
     const result = calculateVotingResult(votes, options, config, providerConfigs);
 
     // 4. 构建响应

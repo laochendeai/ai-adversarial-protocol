@@ -30,6 +30,8 @@ export default function SettingsPanel({ isOpen, onClose }: SettingsPanelProps) {
     updateSettings({
       claude: claudeConfig,
       openai: openaiConfig,
+      gemini: settings.gemini,
+      local: settings.local,
       sessionBudget,
     });
     onClose();
