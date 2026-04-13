@@ -125,6 +125,39 @@ describe('Voting API', () => {
       expect(data.data.summary.participatedProviders).toContain('openai');
     });
 
+    it('should accept expert-weighted mode and preserve response shape', async () => {
+      const mockRequest = {
+        json: async () => ({
+          messages: [
+            { id: 'msg-1', role: 'assistant', content: 'Response 1' },
+            { id: 'msg-2', role: 'assistant', content: 'Response 2' },
+          ],
+          topic: { id: 'topic-1', content: 'Test topic' },
+          providers: ['claude', 'openai'],
+          config: {
+            mode: 'expert-weighted' as const,
+            threshold: 0.7,
+            tiebreaker: 'first' as const,
+            allowSelfVote: true,
+            expertProvider: 'claude' as const,
+          },
+          context: {},
+        }),
+      } as unknown as NextRequest;
+
+      const response = await POST(mockRequest);
+      const data = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(data.success).toBe(true);
+      expect(data.data).toHaveProperty('result');
+      expect(data.data.result).toHaveProperty('totals');
+      expect(data.data.result).toHaveProperty('consensusLevel');
+      expect(data.data.result).toHaveProperty('winner');
+      expect(data.data).toHaveProperty('votes');
+      expect(data.data).toHaveProperty('summary');
+    });
+
     it('should include all enabled providers in voting results', async () => {
       const mockRequest = {
         json: async () => ({

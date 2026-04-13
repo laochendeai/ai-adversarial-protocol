@@ -138,6 +138,7 @@ export const useAppStore = create<AppState>()(
         threshold: 0.5,
         tiebreaker: 'first',
         allowSelfVote: false,
+        expertProvider: 'claude',
       },
 
       votingResult: undefined,

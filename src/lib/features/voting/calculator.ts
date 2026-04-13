@@ -19,7 +19,7 @@ export function calculateVotingResult(
   options.forEach(opt => totals[opt] = 0);
 
   votes.forEach(vote => {
-    const weight = providerConfigs[vote.voterId]?.weight || 1.0;
+    const weight = resolveVoteWeight(vote.voterId, config, providerConfigs);
     totals[vote.choice] = (totals[vote.choice] || 0) + weight;
   });
 
@@ -49,6 +49,20 @@ export function calculateVotingResult(
     isUnanimous,
     requiresReview,
   };
+}
+
+function resolveVoteWeight(
+  voterId: AIProvider,
+  config: VotingConfig,
+  providerConfigs: Record<AIProvider, AIProviderConfig>
+): number {
+  const baseWeight = providerConfigs[voterId]?.weight || 1.0;
+
+  if (config.mode === 'expert-weighted' && config.expertProvider === voterId) {
+    return baseWeight * 3;
+  }
+
+  return baseWeight;
 }
 
 /**
@@ -87,6 +101,7 @@ function calculateConsensusLevel(
       return maxVotes / totalVotes;
 
     case 'weighted':
+    case 'expert-weighted':
       // 加权模式：已体现在totals中，直接计算比例
       return maxVotes / totalVotes;
 

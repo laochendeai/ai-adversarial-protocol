@@ -242,15 +242,6 @@ export async function expectApiResponse(
 }
 
 /**
- * Setup common mocks for API tests
- */
-export function setupCommonMocks() {
-  vi.mock('@/lib/config', () => ({
-    getServerConfig: () => createMockConfig(),
-  }));
-}
-
-/**
  * Resets all mocks between tests
  */
 export function resetAllMocks() {

@@ -41,6 +41,7 @@ export function useVotingResult(input: VotingCalculationInput): VotingResult | n
     input.config.mode,
     input.config.threshold,
     input.config.tiebreaker,
+    input.config.expertProvider,
     input.providerConfigs,
   ]);
 }
@@ -73,5 +74,6 @@ export function getVotingDeps(input: VotingCalculationInput): string {
     mode: input.config.mode,
     threshold: input.config.threshold,
     tiebreaker: input.config.tiebreaker,
+    expertProvider: input.config.expertProvider,
   });
 }
