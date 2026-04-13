@@ -180,7 +180,7 @@ npm run dev
 - **可配置权重** — 每个AI模型可设置不同权重
 - **安全验证** — LLM输出验证、枚举值校验、置信度过滤
 - **API endpoint**: `/api/voting`
-- **完整文档**: `PHASE2_VOTING.md`
+- **完整文档**: `docs/history/phase-2/PHASE2_VOTING.md`
 
 ### ✅ Phase 2 安全增强（关键修复）
 - **LLM输出验证** — 投票选择必须匹配有效消息ID
@@ -195,7 +195,7 @@ npm run dev
 - **部署日期**: 2026-03-25
 - **健康评分**: 95/100 (QA验证)
 - **关键修复**: 3个安全和正确性问题已修复
-- **发布摘要**: 见 `RELEASE_SUMMARY.md`
+- **发布摘要**: 见 `docs/releases/RELEASE_SUMMARY.md`
 
 ### 技术债务
 - ✅ 测试覆盖率: 77个测试通过，覆盖核心功能
