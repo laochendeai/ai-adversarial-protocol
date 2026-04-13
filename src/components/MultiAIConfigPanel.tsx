@@ -59,10 +59,23 @@ export default function MultiAIConfigPanel({
     }
   };
 
+  const getEnabledProviders = () => {
+    return (Object.keys(providers) as AIProvider[]).filter((providerId) => providers[providerId].enabled);
+  };
+
+  const ensureExpertProvider = (mode: VotingConfig['mode']) => {
+    if (mode !== 'expert-weighted' || votingConfig.expertProvider) {
+      return votingConfig.expertProvider;
+    }
+
+    return getEnabledProviders()[0] || 'claude';
+  };
+
   const getModeLabel = (mode: VotingConfig['mode']) => {
     switch (mode) {
       case 'majority': return '简单多数';
       case 'weighted': return '加权投票';
+      case 'expert-weighted': return '专家加权';
       case 'consensus': return '共识阈值';
       case 'unanimous': return '一致同意';
       default: return '未知';
@@ -164,10 +177,14 @@ export default function MultiAIConfigPanel({
           <div>
             <h4 className="font-medium text-gray-700 mb-2">投票模式</h4>
             <div className="grid grid-cols-2 gap-2">
-              {(['majority', 'weighted', 'consensus', 'unanimous'] as const).map((mode) => (
+              {(['majority', 'weighted', 'expert-weighted', 'consensus', 'unanimous'] as const).map((mode) => (
                 <button
                   key={mode}
-                  onClick={() => onVotingConfigChange({ ...votingConfig, mode })}
+                  onClick={() => onVotingConfigChange({
+                    ...votingConfig,
+                    mode,
+                    expertProvider: ensureExpertProvider(mode),
+                  })}
                   className={`px-3 py-2 rounded-lg text-sm font-medium text-left ${
                     votingConfig.mode === mode
                       ? 'bg-blue-500 text-white'
@@ -180,6 +197,30 @@ export default function MultiAIConfigPanel({
               ))}
             </div>
           </div>
+
+          {votingConfig.mode === 'expert-weighted' && (
+            <div>
+              <h4 className="font-medium text-gray-700 mb-2">专家模型</h4>
+              <select
+                value={votingConfig.expertProvider || getEnabledProviders()[0] || 'claude'}
+                onChange={(e) => onVotingConfigChange({
+                  ...votingConfig,
+                  expertProvider: e.target.value as AIProvider,
+                })}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-white text-sm"
+                disabled={isLoading}
+              >
+                {getEnabledProviders().map((providerId) => (
+                  <option key={providerId} value={providerId}>
+                    {getProviderEmoji(providerId)} {providers[providerId].name}
+                  </option>
+                ))}
+              </select>
+              <p className="mt-2 text-xs text-gray-500">
+                专家模型的投票权重将按其基础权重的 3 倍计算。
+              </p>
+            </div>
+          )}
 
           {/* 共识阈值 */}
           <div>
@@ -236,6 +277,7 @@ export default function MultiAIConfigPanel({
               <li>启用多个AI模型会对每个问题进行投票</li>
               <li>投票模式决定如何计算获胜者</li>
               <li>权重可用于调整某些AI的影响力</li>
+              <li>专家加权模式会将选定专家模型的权重提升为基础权重的 3 倍</li>
               <li>共识度低于阈值时会提示需要人工审查</li>
             </ul>
           </div>

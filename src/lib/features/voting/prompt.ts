@@ -12,7 +12,7 @@ export function generateVotingPrompt(
   request: VotingRequest,
   voterId: AIProvider
 ): string {
-  const { messages, topic, context } = request;
+  const { messages, topic, context, config } = request;
 
   let prompt = `你正在参与一个AI投票系统，用于评估不同AI的回答质量。\n\n`;
 
@@ -36,7 +36,12 @@ export function generateVotingPrompt(
   prompt += `**投票要求:**\n`;
   prompt += `1. 从以上候选答案中选择你认为最好的一个\n`;
   prompt += `2. 选择标准：准确性、完整性、逻辑性、清晰度\n`;
-  prompt += `3. 必须返回有效的JSON格式\n\n`;
+  if (config?.mode === 'expert-weighted' && config.expertProvider) {
+    prompt += `3. 当前为 expert-weighted 模式，专家 AI (${config.expertProvider}) 的投票权重为其基础权重的 3 倍\n`;
+    prompt += `4. 必须返回有效的JSON格式\n\n`;
+  } else {
+    prompt += `3. 必须返回有效的JSON格式\n\n`;
+  }
 
   prompt += `**输出格式:**\n`;
   prompt += `{\n`;

@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import Link from 'next/link';
 import { useAppStore } from '@/lib/store';
 
 export default function TestPage() {
@@ -181,12 +182,12 @@ export default function TestPage() {
         </div>
 
         <div className="mt-6">
-          <a
+          <Link
             href="/"
             className="text-blue-600 hover:text-blue-800 underline"
           >
             ← 返回首页
-          </a>
+          </Link>
         </div>
       </div>
     </div>

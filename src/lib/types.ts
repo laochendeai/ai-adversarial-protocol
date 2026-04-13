@@ -15,6 +15,8 @@ export interface ProviderConfig {
 export interface AppSettings {
   claude: ProviderConfig;
   openai: ProviderConfig;
+  gemini: ProviderConfig;
+  local: ProviderConfig;
   sessionBudget?: number;  // 会话预算限制（美元）
 }
 
@@ -192,10 +194,11 @@ export interface AIProviderConfig {
 // 投票配置
 export interface VotingConfig {
   enabled: boolean;
-  mode: 'majority' | 'weighted' | 'consensus' | 'unanimous';  // 投票模式
+  mode: 'majority' | 'weighted' | 'expert-weighted' | 'consensus' | 'unanimous';  // 投票模式
   threshold: number;         // 共识阈值 (0-1, 多数: 0.5, 一致: 1.0)
   tiebreaker: 'first' | 'random' | 'abstain';  // 平局处理
   allowSelfVote: boolean;   // 是否允许AI给自己投票
+  expertProvider?: AIProvider;  // 专家投票模式下的专家AI
 }
 
 // 投票主题

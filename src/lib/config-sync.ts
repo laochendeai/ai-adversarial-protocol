@@ -82,6 +82,18 @@ export function syncServerConfig(serverConfig: ServerConfigInfo): AppSettings {
       baseUrl: serverConfig.openai.baseUrl,
       model: serverConfig.openai.model,
     },
+    gemini: currentConfig?.gemini || {
+      type: 'native' as const,
+      apiKey: '',
+      baseUrl: 'https://generativelanguage.googleapis.com',
+      model: 'gemini-2.5-flash',
+    },
+    local: currentConfig?.local || {
+      type: 'native' as const,
+      apiKey: '',
+      baseUrl: 'http://localhost:11434',
+      model: 'llama3.2',
+    },
     sessionBudget: currentConfig?.sessionBudget || 5.0,
   };
 

@@ -6,6 +6,8 @@
 import { Message, ProviderConfig } from './types';
 import { streamClaudeResponse, ClaudeResponse } from './claude-client';
 import { streamOpenAIResponse, OpenAIResponse } from './openai-client';
+import { streamGeminiResponse, GeminiResponse } from './gemini-client';
+import { streamOllamaResponse, OllamaResponse } from './ollama-client';
 import { getServerConfig } from './config';
 
 /**
@@ -88,6 +90,100 @@ export async function callOpenAIAPI(params: {
   let fullContent = '';
 
   const response: OpenAIResponse = await streamOpenAIResponse({
+    messages,
+    provider,
+    onChunk: (content, done) => {
+      fullContent += content;
+    },
+    opponentMessage,
+  });
+
+  return {
+    content: fullContent || response.content,
+    messageId,
+  };
+}
+
+/**
+ * 调用Gemini API（非streaming，用于串行模式）
+ */
+export async function callGeminiAPI(params: {
+  question: string;
+  debateState: { messages: Message[] };
+  opponentMessage?: Message;
+  provider?: ProviderConfig;
+}): Promise<{ content: string; messageId: string }> {
+  const { question, debateState, opponentMessage, provider: providerOverride } = params;
+
+  // 构建消息列表
+  const messages: Message[] = [
+    ...debateState.messages,
+    {
+      id: `user-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
+      role: 'user',
+      content: question,
+      timestamp: Date.now(),
+    },
+  ];
+
+  const messageId = `gemini-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+
+  // 获取server config（优先使用provider覆盖）
+  const serverConfig = getServerConfig();
+  const provider: ProviderConfig = providerOverride
+    ? { ...serverConfig.gemini, ...providerOverride }
+    : serverConfig.gemini;
+
+  let fullContent = '';
+
+  const response: GeminiResponse = await streamGeminiResponse({
+    messages,
+    provider,
+    onChunk: (content, done) => {
+      fullContent += content;
+    },
+    opponentMessage,
+  });
+
+  return {
+    content: fullContent || response.content,
+    messageId,
+  };
+}
+
+/**
+ * 调用Ollama API（非streaming，用于串行模式）
+ */
+export async function callOllamaAPI(params: {
+  question: string;
+  debateState: { messages: Message[] };
+  opponentMessage?: Message;
+  provider?: ProviderConfig;
+}): Promise<{ content: string; messageId: string }> {
+  const { question, debateState, opponentMessage, provider: providerOverride } = params;
+
+  // 构建消息列表
+  const messages: Message[] = [
+    ...debateState.messages,
+    {
+      id: `user-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
+      role: 'user',
+      content: question,
+      timestamp: Date.now(),
+    },
+  ];
+
+  const messageId = `local-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+
+  // 获取server config（优先使用provider覆盖）
+  const serverConfig = getServerConfig();
+  const provider: ProviderConfig = providerOverride
+    ? { ...serverConfig.local, ...providerOverride }
+    : serverConfig.local;
+
+  let fullContent = '';
+
+  const response: OllamaResponse = await streamOllamaResponse({
     messages,
     provider,
     onChunk: (content, done) => {

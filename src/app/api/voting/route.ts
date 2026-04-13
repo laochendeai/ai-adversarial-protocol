@@ -7,34 +7,35 @@ import { NextRequest, NextResponse } from 'next/server';
 import { VotingRequest, VotingResponse, Vote, AIProvider, AIProviderConfig } from '@/lib/types';
 import { generateVotingPrompt, parseVotingResponse } from '@/lib/features/voting/prompt';
 import { calculateVotingResult } from '@/lib/features/voting/calculator';
-import { callClaudeAPI, callOpenAIAPI } from '@/lib/api-helpers';
+import { callClaudeAPI, callOpenAIAPI, callGeminiAPI as callGeminiAPIHelper, callOllamaAPI } from '@/lib/api-helpers';
+import { getServerConfig } from '@/lib/config';
 
-// Gemini API调用（简化版本，实际需要完整的客户端）
+// Wrapper function for Gemini API (adapts voting route signature to api-helpers signature)
 async function callGeminiAPI(
   prompt: string,
   config: AIProviderConfig
 ): Promise<string> {
-  // TODO: 实现Gemini API调用
-  // 这里先返回模拟响应
-  return JSON.stringify({
-    choice: 'option-1',
-    confidence: 0.8,
-    reasoning: 'Gemini模拟投票'
+  const serverConfig = getServerConfig();
+  const response = await callGeminiAPIHelper({
+    question: prompt,
+    debateState: { messages: [] },
+    provider: serverConfig.gemini,
   });
+  return response.content;
 }
 
-// Local AI调用（通过Ollama等）
+// Wrapper function for Local AI/Ollama (adapts voting route signature to api-helpers signature)
 async function callLocalAI(
   prompt: string,
   config: AIProviderConfig
 ): Promise<string> {
-  // TODO: 实现Local AI调用
-  // 这里先返回模拟响应
-  return JSON.stringify({
-    choice: 'option-1',
-    confidence: 0.7,
-    reasoning: 'Local AI模拟投票'
+  const serverConfig = getServerConfig();
+  const response = await callOllamaAPI({
+    question: prompt,
+    debateState: { messages: [] },
+    provider: serverConfig.local,
   });
+  return response.content;
 }
 
 export async function POST(request: NextRequest) {
@@ -156,7 +157,6 @@ export async function POST(request: NextRequest) {
     }
 
     // 3. 计算投票结果
-    const options = messages.map(m => m.id);
     const result = calculateVotingResult(votes, options, config, providerConfigs);
 
     // 4. 构建响应

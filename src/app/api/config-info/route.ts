@@ -8,6 +8,7 @@ import { getServerConfig } from '@/lib/config';
 import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
+import { votingCache } from '@/lib/server-cache';
 
 export const runtime = 'nodejs'; // 需要Node.js runtime来读取文件
 
@@ -85,6 +86,18 @@ function detectClaudeConfigSync() {
 
 export async function GET() {
   try {
+    // Config info rarely changes - use longer cache TTL (5 minutes)
+    const cacheKey = 'config-info';
+    const cached = votingCache.get(cacheKey);
+
+    if (cached) {
+      return NextResponse.json({
+        success: true,
+        ...cached,
+        cached: true,
+      });
+    }
+
     const config = getServerConfig();
 
     // 自动检测配置
@@ -117,8 +130,7 @@ export async function GET() {
 
     const report = reportLines.join('\n');
 
-    return NextResponse.json({
-      success: true,
+    const responseData = {
       config: {
         claude: {
           type: config.claude.type,
@@ -152,6 +164,15 @@ export async function GET() {
         } : null,
       },
       report,
+    };
+
+    // Store in cache (5 minute TTL - config rarely changes)
+    votingCache.set(cacheKey, responseData, 300000);
+
+    return NextResponse.json({
+      success: true,
+      ...responseData,
+      cached: false,
     });
   } catch (error) {
     return NextResponse.json(

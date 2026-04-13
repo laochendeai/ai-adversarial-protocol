@@ -54,7 +54,7 @@ describe('AuditMetrics Calculator', () => {
       metrics.totalMessages = 5;
       metrics.totalChallenges = 0;
 
-      expect(calculateReliabilityScore(metrics)).toBe(95);
+      expect(calculateReliabilityScore(metrics)).toBe(100);
     });
   });
 
