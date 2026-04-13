@@ -18,6 +18,7 @@ interface AppState {
   addMessage: (message: Message) => void;
   updateMessage: (messageId: string, content: string) => void;
   addChallenge: (challenge: Challenge) => void;
+  updateChallengeStatus: (challengeId: string, status: 'accepted' | 'rejected' | 'debated') => void;
   clearMessages: () => void;
   setStreaming: (isStreaming: boolean) => void;
   updateTokenCount: (claude: number, openai: number) => void;
@@ -196,6 +197,19 @@ export const useAppStore = create<AppState>()(
             challenges: [...state.debateState.challenges, challenge],
           };
           // 自动保存到LocalStorage
+          saveConversation(newState);
+          return { debateState: newState };
+        }),
+
+      updateChallengeStatus: (challengeId, status) =>
+        set((state) => {
+          const challenges = state.debateState.challenges.map((challenge) =>
+            challenge.id === challengeId ? { ...challenge, status } : challenge
+          );
+          const newState = {
+            ...state.debateState,
+            challenges,
+          };
           saveConversation(newState);
           return { debateState: newState };
         }),

@@ -61,6 +61,8 @@ export default function Home() {
     autoChallengeConfig,
     updateAutoChallengeConfig,
     addChallenge,
+    updateChallengeStatus,
+    updateAuditMetrics,
     aiProviders,
     updateAIProviders,
     votingConfig,
@@ -528,6 +530,29 @@ export default function Home() {
     }
   };
 
+  const handleChallengeAction = (challengeId: string, action: 'accept' | 'reject' | 'debate') => {
+    const targetChallenge = debateState.challenges.find((challenge) => challenge.id === challengeId);
+    if (!targetChallenge) return;
+
+    if (action === 'accept') {
+      updateChallengeStatus(challengeId, 'accepted');
+      const targetAi = targetChallenge.challengerAi === 'claude' ? 'openai' : 'claude';
+      updateAuditMetrics(targetAi, 'outcome', 'accepted');
+    } else if (action === 'reject') {
+      updateChallengeStatus(challengeId, 'rejected');
+      const targetAi = targetChallenge.challengerAi === 'claude' ? 'openai' : 'claude';
+      updateAuditMetrics(targetAi, 'outcome', 'rejected');
+    } else {
+      updateChallengeStatus(challengeId, 'debated');
+    }
+
+    setAutoChallenges((currentChallenges) =>
+      currentChallenges.map((challenge) =>
+        challenge.id === challengeId ? { ...challenge, status: action === 'debate' ? 'debated' : action === 'accept' ? 'accepted' : 'rejected' } : challenge
+      )
+    );
+  };
+
   const handleClearHistory = () => {
     if (confirm('确定要清空所有对话历史吗？')) {
       clearMessages();
@@ -618,10 +643,7 @@ export default function Home() {
           <Suspense fallback={<div className="bg-white rounded-lg shadow-md p-4">Loading challenges...</div>}>
             <AutoChallengePanel
               challenges={autoChallenges}
-              onChallengeAction={(challengeId, action) => {
-                console.log('Challenge action:', challengeId, action);
-                // TODO: 实现接受/拒绝/辩论逻辑
-              }}
+              onChallengeAction={handleChallengeAction}
             />
           </Suspense>
         </div>
