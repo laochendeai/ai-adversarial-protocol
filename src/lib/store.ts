@@ -5,7 +5,7 @@
 
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { DebateState, Message, Challenge, AppSettings, ProviderConfig, AuditState, AuditMetrics, SerialReferenceConfig, AutoChallengeConfig, AIProvider, AIProviderConfig, VotingConfig, VotingResult } from './types';
+import { DebateState, Message, Challenge, AppSettings, ProviderConfig, AuditState, AuditMetrics, SerialReferenceConfig, AutoChallengeConfig, AIProvider, AIProviderConfig, VotingConfig, VotingResult, VotingHistoryState } from './types';
 import { getClientConfig, saveSettings, DEFAULT_SETTINGS } from './config';
 import { saveConversation, clearConversation as clearConv } from './conversation-store';
 import { getMetrics, updateMetrics, recordMessage, recordChallenge, recordChallengeOutcome, createInitialMetrics } from './features/audit-metrics';
@@ -60,9 +60,11 @@ interface AppState {
   aiProviders: Record<AIProvider, AIProviderConfig>;
   votingConfig: VotingConfig;
   votingResult?: VotingResult;
+  votingHistory: VotingHistoryState;
   updateAIProviders: (providers: Record<AIProvider, AIProviderConfig>) => void;
   updateVotingConfig: (config: VotingConfig) => void;
   setVotingResult: (result: VotingResult | undefined) => void;
+  addVotingHistoryEntry: (result: VotingResult) => void;
 }
 
 export const useAppStore = create<AppState>()(
@@ -143,6 +145,9 @@ export const useAppStore = create<AppState>()(
       },
 
       votingResult: undefined,
+      votingHistory: {
+        history: [],
+      },
 
       // Debate状态操作
       addMessage: (message) =>
@@ -364,6 +369,20 @@ export const useAppStore = create<AppState>()(
 
       setVotingResult: (result) =>
         set({ votingResult: result }),
+
+      addVotingHistoryEntry: (result) =>
+        set((state) => ({
+          votingHistory: {
+            history: [
+              {
+                id: `${result.topicId}-${Date.now()}`,
+                result,
+                createdAt: Date.now(),
+              },
+              ...state.votingHistory.history,
+            ].slice(0, 10),
+          },
+        })),
     }),
     {
       name: 'ai-adversarial-storage',
@@ -374,6 +393,7 @@ export const useAppStore = create<AppState>()(
         autoChallengeConfig: state.autoChallengeConfig, // Phase 2 - Feature 2
         aiProviders: state.aiProviders, // Phase 2 - Feature 4
         votingConfig: state.votingConfig, // Phase 2 - Feature 4
+        votingHistory: state.votingHistory,
       }),
     }
   )

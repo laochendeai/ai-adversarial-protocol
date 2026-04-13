@@ -233,6 +233,16 @@ export interface VotingResult {
   requiresReview: boolean;   // 是否需要人工审查
 }
 
+export interface VotingHistoryEntry {
+  id: string;
+  result: VotingResult;
+  createdAt: number;
+}
+
+export interface VotingHistoryState {
+  history: VotingHistoryEntry[];
+}
+
 // 投票请求
 export interface VotingRequest {
   messages: Message[];       // 候选答案（通常是多个AI的输出）

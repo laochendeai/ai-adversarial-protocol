@@ -26,3 +26,38 @@ describe('store challenge status updates', () => {
     expect(updatedChallenge.status).toBe('accepted');
   });
 });
+
+describe('store voting history', () => {
+  it('adds voting history entries in reverse chronological order', () => {
+    useAppStore.setState({
+      votingHistory: { history: [] },
+    });
+
+    useAppStore.getState().addVotingHistoryEntry({
+      topicId: 'vote-1',
+      votes: [],
+      totals: {},
+      winner: 'msg-1',
+      consensusLevel: 1,
+      isTie: false,
+      isUnanimous: true,
+      requiresReview: false,
+    });
+
+    useAppStore.getState().addVotingHistoryEntry({
+      topicId: 'vote-2',
+      votes: [],
+      totals: {},
+      winner: 'msg-2',
+      consensusLevel: 0.8,
+      isTie: false,
+      isUnanimous: false,
+      requiresReview: false,
+    });
+
+    const history = useAppStore.getState().votingHistory.history;
+    expect(history).toHaveLength(2);
+    expect(history[0].result.topicId).toBe('vote-2');
+    expect(history[1].result.topicId).toBe('vote-1');
+  });
+});
