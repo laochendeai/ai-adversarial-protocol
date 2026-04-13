@@ -87,8 +87,8 @@
 ## Documentation
 
 **New Files Created:**
-- `PHASE2_VOTING.md` - Complete Stage 5 implementation guide
-- `PLAN_PHASE2_REVIEW.md` - Comprehensive autoplan review results
+- `docs/history/phase-2/PHASE2_VOTING.md` - Complete Stage 5 implementation guide
+- `docs/reviews/PLAN_PHASE2_REVIEW.md` - Comprehensive autoplan review results
 - `.gstack/qa-reports/qa-report-*.md` - QA test reports with evidence
 
 **Updated Files:**
