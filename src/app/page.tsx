@@ -37,6 +37,10 @@ const VotingResultPanel = dynamic(() => import('@/components/VotingResultPanel')
   loading: () => <div className="bg-white rounded-lg shadow-md p-4">Loading voting results...</div>,
 });
 
+const VotingHistoryPanel = dynamic(() => import('@/components/VotingHistoryPanel'), {
+  loading: () => <div className="bg-white rounded-lg shadow-md p-4">Loading voting history...</div>,
+});
+
 export default function Home() {
   const [question, setQuestion] = useState('');
   const [isLoaded, setIsLoaded] = useState(false);
@@ -69,6 +73,8 @@ export default function Home() {
     updateVotingConfig,
     votingResult,
     setVotingResult,
+    votingHistory,
+    addVotingHistoryEntry,
   } = useAppStore();
 
   const debateState = useDebateState();
@@ -470,6 +476,7 @@ export default function Home() {
       if (data.success) {
         console.log('Voting completed:', data.data);
         setVotingResult(data.data.result);
+        addVotingHistoryEntry(data.data.result);
         setShowVotingResult(true);
       }
     } catch (error) {
@@ -658,6 +665,14 @@ export default function Home() {
               messages={debateState.messages}
               onClose={() => setShowVotingResult(false)}
             />
+          </Suspense>
+        </div>
+      )}
+
+      {votingHistory.history.length > 0 && (
+        <div className="max-w-7xl mx-auto px-4 pb-4">
+          <Suspense fallback={<div className="bg-white rounded-lg shadow-md p-4">Loading voting history...</div>}>
+            <VotingHistoryPanel history={votingHistory.history} />
           </Suspense>
         </div>
       )}
