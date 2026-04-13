@@ -5,6 +5,11 @@
 
 import { SerialReferenceConfig, RoundType } from '@/lib/types';
 
+interface SerialTriggerInput {
+  primary?: string;
+  secondary?: string;
+}
+
 /**
  * 选择先响应的AI
  */
@@ -82,13 +87,28 @@ export function generateReferenceSummary(content: string, maxLength: number = 10
 /**
  * 检查是否应该触发串行模式
  */
-export function shouldTriggerSerial(config: SerialReferenceConfig): boolean {
+export function shouldTriggerSerial(
+  config: SerialReferenceConfig,
+  input?: SerialTriggerInput
+): boolean {
   if (!config.enabled) return false;
   if (config.mode === 'always-serial') return true;
   if (config.mode === 'hybrid') {
-    // TODO: 实现分歧检测逻辑
-    // 暂时返回false，等待Feature 2实现
-    return false;
+    if (!input?.primary || !input?.secondary) return false;
+
+    const primary = normalizeForComparison(input.primary);
+    const secondary = normalizeForComparison(input.secondary);
+
+    if (!primary || !secondary) return false;
+
+    return primary !== secondary;
   }
   return false;
+}
+
+function normalizeForComparison(content: string): string {
+  return content
+    .trim()
+    .replace(/\s+/g, ' ')
+    .toLowerCase();
 }
