@@ -1,73 +1,123 @@
 # System Architecture: AI Adversarial Protocol
 
-This document serves as the technical map for the repository, defining module responsibilities, data flow, and design patterns to ensure AI agents maintain architectural alignment.
+Technical map for the repository. Defines module responsibilities and data flow so future contributors (human or AI) stay aligned.
 
-## 1. Module Responsibilities
+## 1. Runtime Shape
 
-### 1.1 Feature Modules (`src/lib/features/`)
-The project follows a **Modular Feature Pattern**. Each directory in `src/lib/features/` is a self-contained capability.
+`aap` is a single Node.js process that runs **two front-ends sharing one event bus**:
 
-| Feature | Responsibility | Key Components |
+```
+TUI (ink)  ──┐                  ┌── HTTP Server (Hono)
+             │                  │
+             └──> EngineHub <───┘     ← global EventEmitter singleton
+                     │
+                     └── AdversarialEngine (per-run)
+                              │
+                              └── ModelClient
+                                    ├── openai-protocol
+                                    ├── anthropic-protocol
+                                    └── ollama-protocol
+```
+
+Both the TUI and HTTP routes call `hub.startRun(...)`. Engine events (`run-start`, `chunk`, `phase-change`, `challenge`, `vote`, `voting-result`, `model-complete`, `run-complete`, `run-failed`) are re-emitted on `hub` as `engine-event`. The TUI subscribes for rendering; the HTTP layer subscribes per-request to translate events into OpenAI/Anthropic SSE chunks.
+
+## 2. Module Responsibilities
+
+### 2.1 Engine (`src/engine/`)
+| File | Responsibility |
+| :--- | :--- |
+| `AdversarialEngine.ts` | One instance per run. Drives three phases (generating → auto-challenge → voting), emits events, returns final `RunResult`. |
+| `EngineHub.ts` | Global singleton. Tracks active + last-50 completed runs, broadcasts events, owns the `AppConfig`. |
+| `ModelClient.ts` | Dispatches to a protocol client based on `ModelConfig.protocol`. Returns a unified streaming async iterator + a non-stream variant. Extracts `<thinking>` blocks. |
+
+### 2.2 Protocol Clients (`src/lib/clients/`)
+| File | Protocol |
+| :--- | :--- |
+| `openai-protocol.ts` | `POST /chat/completions` + SSE `data: ...` parsing. Used for any OpenAI-compatible upstream (incl. local multi-model endpoints). |
+| `anthropic-protocol.ts` | `POST /v1/messages` + Anthropic event-typed SSE (`message_start`, `content_block_delta`, `message_delta`). |
+| `ollama-protocol.ts` | Native Ollama `/api/chat` ndjson. |
+
+Each exports a streaming function and a `*NonStream` variant.
+
+### 2.3 Feature Modules (`src/lib/features/`)
+Self-contained capabilities consumed by `AdversarialEngine`. Each is keyed by `modelId: string` (no provider enum).
+
+| Feature | Responsibility | Key files |
 | :--- | :--- | :--- |
-| **Audit Metrics** | Reliability scoring & tracking | `calculator.ts` (Score logic), `storage.ts` |
-| **Voting** | Multi-AI consensus mechanism | `calculator.ts` (Algorithms), `prompt.ts` |
-| **Auto-Challenge** | Automated issue detection in outputs | `prompt.ts` (Audit prompts), `parser.ts` |
-| **Serial Reference** | Sequential AI dialogue orchestration | `utils.ts` (Dialogue chaining) |
-| **Thinking Vis** | Reasoning process extraction & display | `parser.ts` (Tag extraction), `highlight.ts` |
+| **voting** | Multi-model consensus with majority / weighted / consensus / unanimous modes. | `calculator.ts`, `prompt.ts` |
+| **auto-challenge** | Each model audits others' outputs; parser extracts typed challenges. | `prompt.ts`, `parser.ts` |
+| **audit-metrics** | Reliability scoring (A+ ~ D), persisted to `~/.aap/audit-metrics.json`. | `calculator.ts`, `storage.ts` |
+| **thinking-visualization** | Extracts `<thinking>...</thinking>` blocks from model output. | `parser.ts` |
 
-### 1.2 Core Infrastructure (`src/lib/`)
-- **State Management**: `store.ts` (Zustand) - The single source of truth for `debateState` and `settings`, persisted via LocalStorage.
-- **API Clients**: `claude-client.ts`, `openai-client.ts`, etc. - Unified streaming wrappers for various LLM providers.
-- **Configuration**: `config.ts` - Layered priority: `LocalStorage` $\rightarrow$ `.env` $\rightarrow$ `Auto-detect` $\rightarrow$ `Defaults`.
-- **Types**: `types.ts` - Global interface definitions for `Message`, `Challenge`, and `DebateState`.
+### 2.4 Server (`src/server/`)
+| File | Responsibility |
+| :--- | :--- |
+| `index.ts` | Hono app + `@hono/node-server` startup. Accepts `EngineHub` via DI. Returns `{ url, close() }`. |
+| `sse.ts` | `buildOpenAIStream(hub, req)` and `buildAnthropicStream(hub, req)`. Subscribes to engine events, translates to wire format. Multi-model output is merged with `## modelId` markdown headers; final chunk carries `x_adversarial` metadata. |
+| `routes/openai-compat.ts` | `POST /v1/chat/completions` (sync + stream), `GET /v1/models`. Parses the `model` field for `adversarial:*` modes. |
+| `routes/anthropic-compat.ts` | `POST /v1/messages` (sync + stream). |
 
----
+### 2.5 TUI (`src/tui/`)
+| File | Responsibility |
+| :--- | :--- |
+| `App.tsx` | ink top-level. Subscribes to `EngineHub`, renders run list + selected detail + input modal. |
+| `hooks/useHub.ts` | React hook turning hub events into `{ runs, order }` state. |
+| `components/RunListPanel.tsx` | List of all active/recent runs (TUI-triggered + HTTP-triggered). |
+| `components/RunDetailView.tsx` | Phase indicator + per-model output panels + challenges + voting result for the selected run. |
+| `components/InputModal.tsx` | Two-stage modal (model multi-select → question entry). |
+| `components/ModelPanel.tsx` | Single model's streaming output column. |
+| `components/PhaseIndicator.tsx`, `ChallengeView.tsx`, `VoteView.tsx` | Sub-views. |
 
-## 2. Dependency Topology
+### 2.6 CLI + Config
+| File | Responsibility |
+| :--- | :--- |
+| `src/cli.ts` | commander entry. Default action runs TUI + Server. Subcommands: `config init/list/add/remove/enable/disable/path`. |
+| `src/config/loader.ts` | Reads/writes `~/.aap/config.json`. Provides `loadConfig`, `saveConfig`, `addModel`, `removeModel`, `updateModel`. |
 
-### 2.1 Architectural Layers
-`UI Layer (page.tsx)` $\rightarrow$ `State Layer (store.ts)` $\rightarrow$ `Feature Layer (lib/features/*)` $\rightarrow$ `Client Layer (lib/clients/*)` $\rightarrow$ `External APIs`
+## 3. Data Flow
 
-### 2.2 Feature Interaction Flow
-1. **Trigger**: User submits a question.
-2. **Execution**: `page.tsx` triggers parallel streaming calls to `/api/claude` and `/api/openai`.
-3. **Post-Processing**: Once streams complete, the system optionally triggers:
-   - `Auto-Challenge` $\rightarrow$ AI critiques opponent's output.
-   - `Voting` $\rightarrow$ Multiple AIs reach a consensus on the best answer.
-4. **Metric Update**: `Audit Metrics` is updated automatically whenever a message or challenge is recorded in `store.ts`.
+### 3.1 TUI-triggered run
+1. User presses `n`, picks models, types question.
+2. `App.tsx` → `hub.startRun({ question, modelIds, source: 'tui-input' })`.
+3. `useHub` receives `engine-event`s, updates React state, panels re-render with each `chunk`.
+4. On `run-complete`, audit metrics are written to disk.
 
----
+### 3.2 HTTP-triggered run
+1. External agent → `POST /v1/chat/completions` with `model: "adversarial:vote"`.
+2. Route parses `model` → `modelIds` + `mode`.
+3. Calls `hub.startRun({ question, modelIds, source: 'http-openai', mode })`.
+4. SSE handler subscribes to that `runId`'s events, translates them into OpenAI chunks.
+5. Final chunk includes `x_adversarial` metadata; closes with `data: [DONE]`.
+6. The TUI is also subscribed to the same hub, so the run appears in its list in real time.
 
-## 3. Core Design Patterns
+## 4. Configuration
 
-### 3.1 State Persistence
-Uses **Zustand with Persist Middleware**. All conversation history and configuration are synced to `localStorage` under the key `ai-adversarial-storage`.
+`~/.aap/config.json`:
 
-### 3.2 API Streaming (SSE)
-All API routes in `src/app/api/` use **Server-Sent Events (SSE)**. 
-- Client: Uses `fetch` with a readable stream.
-- Server: Returns a `Response` with `Content-Type: text/event-stream`.
+```ts
+interface AppConfig {
+  models: ModelConfig[];        // any number, any protocol
+  server: { port: number; host: string };
+  adversarial: {
+    autoChallenge: { enabled: boolean; threshold: number };
+    voting: { enabled: boolean; mode: 'majority'|'weighted'|'consensus'|'unanimous' };
+  };
+  storageDir: string;
+}
 
-### 3.3 Configuration Priority
-To ensure flexibility across environments, the system resolves settings in this order:
-1. **User-defined LocalStorage** (Highest priority)
-2. **Environment Variables** (`.env`)
-3. **Automatic Detection** (Local tool configs)
-4. **Hard-coded Defaults** (Lowest priority)
+interface ModelConfig {
+  id: string;                   // user alias, e.g. "deepseek-v3"
+  protocol: 'openai' | 'anthropic' | 'ollama';
+  baseUrl: string;
+  apiKey: string;
+  model: string;                // upstream model name
+  weight?: number;              // voting weight (default 1.0)
+  enabled: boolean;
+}
+```
 
----
+No env-var or LocalStorage layering — config file is the single source of truth.
 
-## 4. Next.js App Router Structure
+## 5. Build
 
-### 4.1 API Route Map
-- `/api/claude` & `/api/openai`: Primary chat streams.
-- `/api/auto-challenge`: Orchestrates the `auto-challenge` feature.
-- `/api/voting`: Orchestrates the `voting` feature.
-- `/api/audit-metrics`: Retrieves reliability scores.
-- `/api/serial-reference`: Handles sequential AI turn-taking.
-
-### 4.2 Component Hierarchy
-- `MainLayout.tsx`: Orchestrates the overall conversation view.
-- `SettingsPanel.tsx`: Manages API keys and feature toggles.
-- `ThinkingBlock.tsx`: Specialized renderer for AI reasoning process.
-- `Feature Panels`: (`AuditDashboard`, `VotingResultPanel`, etc.) each map 1:1 to a feature in `src/lib/features/`.
+`tsup` bundles `src/cli.ts` to a single `dist/cli.js` (ESM, target node20). React/ink/ink-* are externals because they ship as ESM and don't need bundling. Shebang is injected by tsup banner; the source file must NOT have its own shebang or it duplicates.
