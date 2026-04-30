@@ -2,12 +2,14 @@
 
 This file defines the behavioral constraints and operational standards for all AI agents working on this repository. These rules are non-negotiable and override general model behavior.
 
-## 🛠 Framework-Specific Guidelines
-### Next.js Critical Warning
-**This is NOT the Next.js you know.** 
-- This version contains breaking changes in APIs, conventions, and file structure.
-- **MANDATORY**: Read the relevant guide in `node_modules/next/dist/docs/` before writing any code.
-- Heed all deprecation notices immediately.
+## 🛠 Project-Specific Guidelines
+
+### Stack reality check
+This project was migrated from a Next.js Web UI to a **Node.js CLI + HTTP server**. There is no Next.js, no Tailwind, no Web UI, no React DOM, no `src/app/`. If something still references those, it's stale and should be removed, not preserved.
+- Front-end: **ink** (React-for-CLI). It shares React but not components with browser React.
+- Server: **Hono** + `@hono/node-server`. Routes are in `src/server/routes/`.
+- Bundler: **tsup**. Entry `src/cli.ts`, output `dist/cli.js` (ESM, single file).
+- Read `ARCHITECTURE.md` before editing engine, server, or TUI code.
 
 ## 🛡 Meta-Rules (Mother-Repo Standards)
 

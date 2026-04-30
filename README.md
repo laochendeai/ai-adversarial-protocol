@@ -1,223 +1,261 @@
-# AI对抗协议 (AI Adversarial Protocol)
+# AI 对抗协议 (aap)
+
+> 让多个 LLM 围绕同一个问题互相挑刺、投票，得到比单模型更可信的答案。CLI 工具 + OpenAI/Anthropic 兼容的 HTTP 服务，单进程同时跑。
 
 [![CI](https://github.com/leo-cy/ai-adversarial-protocol/workflows/CI/badge.svg)](https://github.com/leo-cy/ai-adversarial-protocol/actions/workflows/ci.yml)
 
-Claude vs OpenAI/Codex — 让AI互相审计、挑刺、通过对抗寻找真相。
+## 这是什么
 
-## 项目简介
+`aap` 是一个 Node.js CLI，把任意数量、任意协议（OpenAI / Anthropic / Ollama）的模型放在一起做三阶段对抗：
 
-这是一个探索性的AI协作工具，核心思想是：
-- **现有multi-agent框架都是"协作导向"** — 让AI们协同完成任务
-- **本项目是"对抗导向"** — 让AI互相审计、发现错误、减少幻觉
+1. **生成 (generating)** — 所有选中模型并行回答同一个问题
+2. **互相挑刺 (auto-challenge)** — 每个模型审计其它模型的输出，标注事实错误、逻辑漏洞、遗漏点
+3. **投票 (voting)** — 每个模型给所有答案打分，按权重/共识算出获胜方
 
-### 核心功能
+所有过程都通过 EventEmitter 实时输出。一个进程内同时跑两个前端：
 
-✅ **并行调用两个AI** — Claude和OpenAI同时响应
-✅ **实时可视化** — SSE streaming展示生成过程
-✅ **原生API + 第三方中转双支持** — 灵活的配置系统
-✅ **配置优先级** — LocalStorage > .env > 默认值
-✅ **Token计数** — 实时显示token使用和成本估算
+- **TUI**：基于 ink 的终端界面，实时看到每个模型的流式输出和挑刺/投票结果
+- **HTTP Server**：兼容 OpenAI `/v1/chat/completions` 和 Anthropic `/v1/messages`，外部 agent（Claude Code、Cursor、自研 agent）可以直接调它，TUI 也会同时看到这些外部触发的 run
+
+## 架构
+
+```
+┌─────────────────── aap 进程 ───────────────────┐
+│                                                │
+│   TUI (ink)          HTTP Server (Hono)        │
+│      ↑                    ↑                    │
+│      └────── EngineHub ───┘  ← 全局事件总线     │
+│                  ↓                              │
+│        AdversarialEngine (per-run)              │
+│                  ↓                              │
+│        ModelClient (协议分发)                   │
+│           ↓        ↓        ↓                   │
+│        OpenAI  Anthropic  Ollama                │
+└────────────────────────────────────────────────┘
+```
+
+`EngineHub` 是单例事件总线：TUI 输入和 HTTP 请求都通过它创建 run，所有事件被 TUI 渲染、被 SSE 转发。
 
 ## 快速开始
 
-### 1. 安装依赖
+### 安装
 
 ```bash
 npm install
+npm run build           # 构建 dist/cli.js
+npm link                # 全局可用 aap 命令（可选）
 ```
 
-### 2. 配置API Keys
+或开发模式直接跑：`npm run dev`（等于 `tsx src/cli.ts`）。
 
-复制 `.env.local.example` 为 `.env.local`：
+### 配置模型
+
+配置文件在 `~/.aap/config.json`。第一次跑会自动创建空的：
 
 ```bash
-cp .env.local.example .env.local
+aap config init
 ```
 
-编辑 `.env.local`，填入你的API keys：
-
-```env
-# Claude配置
-CLAUDE_API_KEY=sk-ant-xxx
-CLAUDE_BASE_URL=https://api.anthropic.com  # 或第三方中转
-CLAUDE_MODEL=claude-sonnet-4-20250514
-
-# OpenAI配置
-OPENAI_API_KEY=sk-xxx
-OPENAI_BASE_URL=https://api.openai.com  # 或第三方中转
-OPENAI_MODEL=gpt-4o
-
-# 会话预算限制（美元）
-SESSION_BUDGET=5.00
-```
-
-### 3. 启动开发服务器
+添加模型（用户的本地多模型端点示例）：
 
 ```bash
-npm run dev
+aap config add deepseek-v3 \
+  --protocol openai \
+  --base-url http://192.168.0.122:20128/v1 \
+  --api-key sk-xxx \
+  --model deepseek-ai/DeepSeek-V3.2
+
+aap config add qwen-235b \
+  --protocol openai \
+  --base-url http://192.168.0.122:20128/v1 \
+  --api-key sk-xxx \
+  --model Qwen/Qwen3-235B-A22B-Instruct-2507
+
+aap config add claude-haiku \
+  --protocol anthropic \
+  --base-url https://api.anthropic.com \
+  --api-key sk-ant-xxx \
+  --model claude-haiku-4-5
+
+aap config list
 ```
 
-默认优先使用 `5892` 端口；如果该端口已被占用，会自动切换到下一个可用端口并在终端打印出来。
+每个模型可设置 `--weight <n>` 用于加权投票，加 `--disabled` 暂时禁用。
 
-### 4. 访问应用
+### 启动
 
-打开浏览器访问终端里显示的地址，默认通常是：http://localhost:5892
+```bash
+aap                     # 默认：TUI + Server 同时启动
+aap --no-tui            # headless：只跑 Server（部署用）
+aap --no-server         # 只跑 TUI（本地调试）
+aap --port 9000         # 指定端口（默认 8788）
+aap --host 0.0.0.0      # 监听所有网卡
+```
 
-## Day 1-4 完成项
+## TUI 操作
 
-### ✅ 配置自动检测修复（关键更新）
-**问题**：API endpoints 使用 Edge runtime，无法访问文件系统读取 ~/.codex/ 和 ~/.claude/ 配置
-**解决方案**：
-1. **Runtime 修改**：将 `/api/claude` 和 `/api/openai` 从 Edge runtime 改为 Node.js runtime
-2. **配置加载优化**：添加 `getEnvOrFallback` 辅助函数，空环境变量不再覆盖自动检测的配置
-3. **URL 路径修复**：自动检测的 baseUrl 去掉 `/v1` 后缀（因为 client 会自动添加）
-4. **模型名称检测**：从 Codex config.toml 读取模型名称（如 `gpt-5.4`）
-5. **Hydration 错误修复**：添加 `mounted` 状态，避免服务器端和客户端配置不一致
-6. **唯一 ID 生成**：修复消息 ID 重复问题，添加随机后缀
+| 键 | 动作 |
+|---|---|
+| `↑` / `↓` | 在 run 列表里切换 |
+| `n` | 新建对抗（先选模型，再输入问题） |
+| `q` / `Ctrl+C` | 退出 |
 
-**测试结果**：
-- ✅ Claude API：成功使用 ~/.claude/settings.json 的配置
-- ✅ OpenAI API：成功使用 ~/.codex/ 的配置和模型
-- ✅ 无 Hydration 错误
-- ✅ 无重复 key 警告
+`n` 弹出的窗口里：空格切换模型勾选，Enter 进入问题输入，再按 Enter 触发对抗。
 
-### Day 1: 项目设置 + 配置系统
-- ✅ Next.js项目初始化
-- ✅ TypeScript类型定义 (`lib/types.ts`)
-- ✅ 配置管理系统 (`lib/config.ts`)
-- ✅ 环境变量模板 (`.env.local.example`)
-- ✅ 配置测试页面
+每个 run 会显示：
+- 三阶段进度条（generating → auto-challenge → voting）
+- 每个模型的流式输出、token 数、耗时
+- 互相挑刺的详情（类型/严重性/置信度/原文片段/理由）
+- 投票结果（获胜方、共识度、各模型投票分布）
 
-### Day 2: API适配层 + 后端
-- ✅ Claude API适配器 (`lib/claude-client.ts`)
-- ✅ OpenAI API适配器 (`lib/openai-client.ts`)
-- ✅ API endpoints (`/api/claude`, `/api/openai`)
-- ✅ 并行调用两个API
-- ✅ 实时显示streaming响应
+外部 HTTP 请求触发的 run 也会出现在列表里，标记为 `http-openai` 或 `http-anthropic`。
 
-### Day 3: 前端UI
-- ✅ Zustand状态管理系统 (`lib/store.ts`)
-- ✅ 设置面板UI (`components/SettingsPanel.tsx`)
-- ✅ 完整UI布局 (`components/MainLayout.tsx`)
-  - 左右分屏显示Claude和OpenAI响应
-  - 共享转录（完整对话历史）
-  - Token计数和成本估算
-- ✅ 错误处理
-  - API失败→显示错误、禁用面板
-  - 超时处理（60秒）
-  - Promise.allSettled确保两个API独立失败
+## HTTP API
 
-### Day 4: 挑战功能 + 持久化 + 测试
-- ✅ 手动"挑战"功能 (`components/ChallengeForm.tsx`)
-  - 鼠标悬停显示"挑战此回复"按钮
-  - 挑战表单（输入原因、保存）
-  - 挑战记录面板（显示所有挑战）
-- ✅ LocalStorage持久化 (`lib/conversation-store.ts`)
-  - 对话历史自动保存
-  - 页面刷新后恢复
-  - 清空记录功能
-  - 导出/导入功能
-- ✅ 测试页面 (`/test`)
-  - 配置验证测试
-  - LocalStorage测试
-  - API endpoint可访问性测试
-  - 状态管理测试
+服务监听 `http://127.0.0.1:8788`（默认）。`model` 字段决定行为：
 
-## 测试清单
+| `model` 值 | 行为 |
+|---|---|
+| `adversarial:all` | 调用所有 enabled 模型，并行返回（带挑刺） |
+| `adversarial:vote` | 全部模型 + 投票，主响应是获胜方答案 |
+| `adversarial:debate` | 全部模型 + 挑刺，主响应是合并的多模型输出 |
+| `adversarial:m1,m2,m3` | 指定参与的模型 id |
+| `qwen-235b` | 直接透传，不做对抗 |
 
-### 功能测试
-- ✅ 官方API + 第三方中转都能正常工作
-- ✅ 两个API并行stream正常
-- ✅ API失败时降级到单AI模式
-- ✅ 挑战创建和显示正常
-- ✅ LocalStorage配置保存和加载正常
-- ✅ 对话历史持久化正常
-- ✅ Token计数和成本显示准确
+### OpenAI 兼容
 
-### 手动测试步骤
-1. **自动检测**：如果机器上已安装 Codex 和 Claude，应用会自动检测配置（无需手动配置）
-2. 输入问题，验证两个AI并行响应
-3. 测试"挑战此回复"功能
-4. 刷新页面，验证对话历史恢复
-5. 访问 /config-info 查看配置信息
-6. 测试设置面板配置保存（LocalStorage 优先级最高）
+```bash
+curl -X POST http://127.0.0.1:8788/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "adversarial:vote",
+    "messages": [{"role":"user","content":"用一句话解释熵"}]
+  }'
+```
 
-## Phase 2 功能 (已完成)
+响应是标准 OpenAI Chat Completion 格式，多了一个 `x_adversarial` 扩展字段：
 
-### ✅ Stage 1: 审计质量评分系统
-- AI可靠性评分（A+到D等级）
-- 挑刺类型统计（事实错误、逻辑漏洞等）
-- 挑刺严重性分析
-- 历史趋势跟踪
-- 数据导出功能
+```jsonc
+{
+  "id": "chatcmpl-...",
+  "object": "chat.completion",
+  "model": "adversarial:vote",
+  "choices": [{
+    "index": 0,
+    "message": { "role": "assistant", "content": "<获胜方的回答>" },
+    "finish_reason": "stop"
+  }],
+  "usage": { "prompt_tokens": 4030, "completion_tokens": 108, "total_tokens": 4138 },
+  "x_adversarial": {
+    "runId": "...",
+    "mode": "vote",
+    "responses": [
+      { "modelId": "deepseek-v3", "content": "...", "tokensOut": 49, "durationMs": 5598 },
+      { "modelId": "qwen-235b",   "content": "...", "tokensOut": 59, "durationMs": 4650 }
+    ],
+    "challenges": [{ "challengerId": "qwen-235b", "targetId": "deepseek-v3", "type": "...", "severity": "high", "reason": "...", "confidence": 0.95 }],
+    "voting": { "winnerId": "deepseek-v3", "consensusLevel": 1.0, "isUnanimous": true, "votes": [...] }
+  }
+}
+```
 
-### ✅ Stage 2: 串行互相引用机制
-- 串行vs并行模式切换
-- 第一响应者选择（自动/Claude/OpenAI）
-- AI B → AI A 引用流程
-- 串行模式提示增强
-- API endpoint: `/api/serial-reference`
+流式：加 `"stream": true`，按标准 OpenAI SSE 输出，每个模型用 `## modelId` markdown header 分隔；最后一个 chunk 携带 `x_adversarial`，再发 `data: [DONE]`。
 
-### ✅ Stage 3: 思维过程可视化
-- `<thinking>` 标签解析
-- 三种显示模式（内联/侧边栏/模态）
-- 复杂度评估
-- 关键洞察高亮
-- 步骤分解显示
+`GET /v1/models` 列出所有 `adversarial:*` 虚拟模型 + 配置中的真实模型 id。
 
-### ✅ Stage 4: 自动挑刺机制
-- AI自动互相审计
-- 置信度过滤（默认0.7）
-- 挑刺去重和验证
-- 类型分类（事实错误/逻辑漏洞/遗漏/不清）
-- 严重性标记（高/中/低）
-- API endpoint: `/api/auto-challenge`
+### Anthropic 兼容
 
-### ✅ Stage 5: 多AI投票机制
-- **4个AI模型支持** — Claude、OpenAI、Gemini、Local AI
-- **4种投票模式** — majority（简单多数）、weighted（加权投票）、consensus（共识阈值）、unanimous（一致同意）
-- **智能共识算法** — 自动计算共识度，支持平局处理策略
-- **可配置权重** — 每个AI模型可设置不同权重
-- **安全验证** — LLM输出验证、枚举值校验、置信度过滤
-- **API endpoint**: `/api/voting`
-- **完整文档**: `docs/history/phase-2/PHASE2_VOTING.md`
+```bash
+curl -X POST http://127.0.0.1:8788/v1/messages \
+  -H "Content-Type: application/json" \
+  -H "anthropic-version: 2023-06-01" \
+  -d '{
+    "model": "adversarial:debate",
+    "max_tokens": 1024,
+    "messages": [{"role":"user","content":"1+1=?"}]
+  }'
+```
 
-### ✅ Phase 2 安全增强（关键修复）
-- **LLM输出验证** — 投票选择必须匹配有效消息ID
-- **枚举值校验** — 挑刺类型和严重性必须为有效枚举值
-- **时间计算修复** — 投票API时间统计准确性修复
-- **置信度过滤** — 自动过滤低置信度挑刺（≥0.7）
+返回标准 Anthropic Message 格式（`type: "message"`, `content: [{type:"text",...}]`），同样带 `x_adversarial` 字段。流式遵循 Anthropic 的 `message_start` / `content_block_delta` / `message_delta` / `message_stop` 事件协议。
 
-## 部署状态
+### 接入 Claude Code
 
-**Phase 2 已完成并部署** ✅
+把 Claude Code 的 endpoint 指过来，所有对话都会走对抗协议：
 
-- **部署日期**: 2026-03-25
-- **健康评分**: 95/100 (QA验证)
-- **关键修复**: 3个安全和正确性问题已修复
-- **发布摘要**: 见 `docs/releases/RELEASE_SUMMARY.md`
+```bash
+export ANTHROPIC_BASE_URL=http://127.0.0.1:8788
+export ANTHROPIC_AUTH_TOKEN=any
+claude
+```
 
-### 技术债务
-- ✅ 测试覆盖率: 77个测试通过，覆盖核心功能
-- ⚠️ 代码风格: 60个 ESLint 警告（非阻塞）
-- 文档: 完整且全面
-- 代码质量: 生产就绪
+或在 `~/.claude/settings.json` 里写死。同时打开 `aap` 的 TUI，可以实时看到 Claude Code 每次请求被多模型对抗的过程。
 
-### Phase 3: Production Readiness (已完成 ✅)
-- ✅ Gemini API真实集成 — 完整的Google AI Studio API支持
-- ✅ Local AI (Ollama) 真实集成 — 支持localhost:11434本地模型
-- ✅ 性能优化和缓存 — SWR缓存、Memoization、Code Splitting、Bundle优化
-- ✅ 测试套件补充 — Vitest + React Testing Library (77个测试通过)
-- ✅ 测试工具库 — 完整的测试工具和文档
-- ✅ CI/CD自动化 — GitHub Actions (类型检查 + 测试自动运行)
+### 接入 OpenAI SDK
 
-## 设计文档
+```python
+from openai import OpenAI
+client = OpenAI(base_url="http://127.0.0.1:8788/v1", api_key="any")
+resp = client.chat.completions.create(
+    model="adversarial:vote",
+    messages=[{"role":"user","content":"hi"}],
+)
+print(resp.choices[0].message.content)
+print(resp.model_extra["x_adversarial"]["voting"])
+```
 
-完整的设计文档保存在：
-`~/.gstack/projects/default/leo-cy-unknown-design-20260324-231000.md`
+## 配置子命令
 
-## 开源协议
+```
+aap config init                  # 初始化空配置
+aap config list                  # 列出所有模型
+aap config add <id> ...          # 添加模型
+aap config remove <id>           # 删除
+aap config enable <id>           # 启用
+aap config disable <id>          # 禁用
+aap config path                  # 打印配置文件路径
+```
+
+## 持久化
+
+`~/.aap/`：
+- `config.json` — 模型 + 服务器配置
+- `audit-metrics.json` — 每个模型的累计可靠性评分（A+ ~ D）
+
+## 项目结构
+
+```
+src/
+├── cli.ts                     # commander CLI 入口
+├── config/loader.ts           # ~/.aap/config.json 读写
+├── engine/
+│   ├── AdversarialEngine.ts   # 单次对抗（EventEmitter）
+│   ├── EngineHub.ts           # 全局事件总线
+│   └── ModelClient.ts         # 协议分发
+├── lib/
+│   ├── clients/               # openai / anthropic / ollama 协议实现
+│   ├── features/              # voting / auto-challenge / audit-metrics / thinking-vis
+│   └── types.ts
+├── server/
+│   ├── index.ts               # Hono 服务启动
+│   ├── sse.ts                 # SSE 流转换
+│   └── routes/                # openai-compat / anthropic-compat
+└── tui/
+    ├── App.tsx                # ink 顶层
+    ├── hooks/useHub.ts        # 订阅 EngineHub
+    └── components/            # RunListPanel / RunDetailView / ModelPanel / ...
+```
+
+## 开发
+
+```bash
+npm run dev              # tsx src/cli.ts（直接跑源码）
+npm run build            # tsup 打包到 dist/cli.js
+npm run type-check       # tsc --noEmit
+npm test                 # vitest --run
+```
+
+构建产物是单个 ~83 KB 的 ESM 文件 + sourcemap，运行时只依赖 `react/ink/ink-*`（external）。
+
+## 许可
 
 MIT
-
-Built with Claude Code + gstack

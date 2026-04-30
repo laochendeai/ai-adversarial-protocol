@@ -1,207 +1,83 @@
-/**
- * 审计质量评分计算器测试
- * Audit Metrics Calculator Tests
- */
-
+import { describe, it, expect } from 'vitest';
 import {
-  calculateReliabilityScore,
   createInitialMetrics,
+  calculateReliabilityScore,
   recordMessage,
   recordChallenge,
   recordChallengeOutcome,
   getScoreGrade,
 } from '../calculator';
+import { Challenge } from '@/lib/types';
 
-describe('AuditMetrics Calculator', () => {
-  describe('calculateReliabilityScore', () => {
-    it('should return -1 for insufficient data (< 5 messages)', () => {
-      const metrics = createInitialMetrics('claude');
-      metrics.totalMessages = 3;
+function challenge(severity: Challenge['severity'], type: Challenge['type'] = 'factual-error'): Challenge {
+  return {
+    id: 'c1',
+    challengerId: 'x',
+    targetId: 'y',
+    type,
+    severity,
+    targetSegment: '',
+    reason: '',
+    confidence: 0.9,
+    status: 'pending',
+    timestamp: 0,
+  };
+}
 
-      expect(calculateReliabilityScore(metrics)).toBe(-1);
-    });
-
-    it('should return 100 for perfect performance (no challenges)', () => {
-      const metrics = createInitialMetrics('claude');
-      metrics.totalMessages = 10;
-      metrics.totalChallenges = 0;
-
-      expect(calculateReliabilityScore(metrics)).toBe(100);
-    });
-
-    it('should penalize for high challenge rate', () => {
-      const metrics = createInitialMetrics('claude');
-      metrics.totalMessages = 10;
-      metrics.totalChallenges = 5; // 50% challenge rate
-      metrics.challengesBySeverity.high = 2;
-      metrics.acceptedChallenges = 3;
-
-      const score = calculateReliabilityScore(metrics);
-      expect(score).toBeLessThan(100);
-      expect(score).toBeGreaterThan(0);
-    });
-
-    it('should give bonus for 10+ messages with no challenges', () => {
-      const metrics = createInitialMetrics('claude');
-      metrics.totalMessages = 15;
-      metrics.totalChallenges = 0;
-
-      expect(calculateReliabilityScore(metrics)).toBe(100);
-    });
-
-    it('should handle edge case of exactly 5 messages', () => {
-      const metrics = createInitialMetrics('claude');
-      metrics.totalMessages = 5;
-      metrics.totalChallenges = 0;
-
-      expect(calculateReliabilityScore(metrics)).toBe(100);
-    });
+describe('audit-metrics calculator', () => {
+  it('starts at 100 with no data', () => {
+    const m = createInitialMetrics('model-x');
+    expect(m.reliabilityScore).toBe(100);
+    expect(m.modelId).toBe('model-x');
   });
 
-  describe('createInitialMetrics', () => {
-    it('should create metrics with correct initial values', () => {
-      const metrics = createInitialMetrics('claude');
-
-      expect(metrics.aiId).toBe('claude');
-      expect(metrics.totalMessages).toBe(0);
-      expect(metrics.totalChallenges).toBe(0);
-      expect(metrics.reliabilityScore).toBe(100);
-      expect(metrics.challengesByType.factualError).toBe(0);
-      expect(metrics.challengesBySeverity.high).toBe(0);
-    });
+  it("returns -1 when fewer than 5 messages have been seen", () => {
+    let m = createInitialMetrics('m');
+    for (let i = 0; i < 4; i++) m = recordMessage(m);
+    expect(calculateReliabilityScore(m)).toBe(-1);
   });
 
-  describe('recordMessage', () => {
-    it('should increment totalMessages', () => {
-      const metrics = createInitialMetrics('claude');
-      const updated = recordMessage(metrics);
+  it('penalises high challenge rate and severe challenges', () => {
+    let clean = createInitialMetrics('clean');
+    for (let i = 0; i < 10; i++) clean = recordMessage(clean);
+    const cleanScore = calculateReliabilityScore(clean);
 
-      expect(updated.totalMessages).toBe(1);
-      expect(updated.totalChallenges).toBe(0);
-    });
+    let dirty = createInitialMetrics('dirty');
+    for (let i = 0; i < 10; i++) dirty = recordMessage(dirty);
+    for (let i = 0; i < 5; i++) dirty = recordChallenge(dirty, challenge('high'));
 
-    it('should preserve other fields', () => {
-      const metrics = createInitialMetrics('claude');
-      metrics.totalChallenges = 2;
-      const updated = recordMessage(metrics);
-
-      expect(updated.totalMessages).toBe(1);
-      expect(updated.totalChallenges).toBe(2);
-    });
+    expect(cleanScore).toBe(100);
+    expect(dirty.reliabilityScore).toBeLessThan(cleanScore);
   });
 
-  describe('recordChallenge', () => {
-    it('should increment totalChallenges', () => {
-      const metrics = createInitialMetrics('claude');
-      const challenge = {
-        id: '1',
-        messageIndex: 0,
-        reason: 'Test',
-        timestamp: Date.now(),
-        challengeType: 'factual-error' as const,
-        severity: 'high' as const,
-      };
-
-      const updated = recordChallenge(metrics, challenge);
-
-      expect(updated.totalChallenges).toBe(1);
-      expect(updated.challengesByType.factualError).toBe(1);
-      expect(updated.challengesBySeverity.high).toBe(1);
-    });
-
-    it('should recalculate score', () => {
-      const metrics = createInitialMetrics('claude');
-      metrics.totalMessages = 10;
-
-      const challenge = {
-        id: '1',
-        messageIndex: 0,
-        reason: 'Test',
-        timestamp: Date.now(),
-        challengeType: 'logical-flaw' as const,
-        severity: 'medium' as const,
-      };
-
-      const updated = recordChallenge(metrics, challenge);
-
-      expect(updated.reliabilityScore).toBeLessThan(100);
-    });
+  it('records type and severity buckets', () => {
+    let m = createInitialMetrics('m');
+    for (let i = 0; i < 10; i++) m = recordMessage(m);
+    m = recordChallenge(m, challenge('high', 'factual-error'));
+    m = recordChallenge(m, challenge('low', 'omission'));
+    expect(m.challengesByType['factual-error']).toBe(1);
+    expect(m.challengesByType['omission']).toBe(1);
+    expect(m.challengesBySeverity.high).toBe(1);
+    expect(m.challengesBySeverity.low).toBe(1);
+    expect(m.totalChallenges).toBe(2);
   });
 
-  describe('recordChallengeOutcome', () => {
-    it('should increment acceptedChallenges', () => {
-      const metrics = createInitialMetrics('claude');
-      metrics.totalChallenges = 1;
-
-      const updated = recordChallengeOutcome(metrics, 'accepted');
-
-      expect(updated.acceptedChallenges).toBe(1);
-      expect(updated.rejectedChallenges).toBe(0);
-    });
-
-    it('should increment rejectedChallenges', () => {
-      const metrics = createInitialMetrics('claude');
-      metrics.totalChallenges = 1;
-
-      const updated = recordChallengeOutcome(metrics, 'rejected');
-
-      expect(updated.acceptedChallenges).toBe(0);
-      expect(updated.rejectedChallenges).toBe(1);
-    });
-
-    it('should recalculate score', () => {
-      const metrics = createInitialMetrics('claude');
-      metrics.totalMessages = 10;
-      metrics.totalChallenges = 1;
-
-      const updated = recordChallengeOutcome(metrics, 'accepted');
-
-      // Score should be recalculated (may be different)
-      expect(updated.reliabilityScore).toBeDefined();
-    });
+  it('counts accepted vs rejected outcomes', () => {
+    let m = createInitialMetrics('m');
+    for (let i = 0; i < 10; i++) m = recordMessage(m);
+    m = recordChallenge(m, challenge('high'));
+    m = recordChallengeOutcome(m, 'accepted');
+    m = recordChallengeOutcome(m, 'rejected');
+    expect(m.acceptedChallenges).toBe(1);
+    expect(m.rejectedChallenges).toBe(1);
   });
 
-  describe('getScoreGrade', () => {
-    it('should return correct grade for excellent scores', () => {
-      const grade = getScoreGrade(95);
-      expect(grade.grade).toBe('A+');
-      expect(grade.color).toBe('green');
-      expect(grade.description).toBe('优秀');
-    });
-
-    it('should return correct grade for good scores', () => {
-      const grade = getScoreGrade(85);
-      expect(grade.grade).toBe('A');
-      expect(grade.color).toBe('green');
-      expect(grade.description).toBe('良好');
-    });
-
-    it('should return correct grade for medium scores', () => {
-      const grade = getScoreGrade(75);
-      expect(grade.grade).toBe('B');
-      expect(grade.color).toBe('yellow');
-      expect(grade.description).toBe('中等');
-    });
-
-    it('should return correct grade for passing scores', () => {
-      const grade = getScoreGrade(65);
-      expect(grade.grade).toBe('C');
-      expect(grade.color).toBe('orange');
-      expect(grade.description).toBe('及格');
-    });
-
-    it('should return correct grade for poor scores', () => {
-      const grade = getScoreGrade(55);
-      expect(grade.grade).toBe('D');
-      expect(grade.color).toBe('red');
-      expect(grade.description).toBe('需改进');
-    });
-
-    it('should return N/A for insufficient data', () => {
-      const grade = getScoreGrade(-1);
-      expect(grade.grade).toBe('N/A');
-      expect(grade.color).toBe('gray');
-      expect(grade.description).toBe('数据不足');
-    });
+  it('maps score to grade buckets', () => {
+    expect(getScoreGrade(-1).grade).toBe('N/A');
+    expect(getScoreGrade(95).grade).toBe('A+');
+    expect(getScoreGrade(85).grade).toBe('A');
+    expect(getScoreGrade(75).grade).toBe('B');
+    expect(getScoreGrade(65).grade).toBe('C');
+    expect(getScoreGrade(40).grade).toBe('D');
   });
 });

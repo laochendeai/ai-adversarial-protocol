@@ -1,0 +1,125 @@
+/**
+ * 应用配置加载与持久化
+ * Config loader - reads/writes ~/.aap/config.json
+ */
+
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
+import { join } from 'path';
+import { homedir } from 'os';
+import { AppConfig, ModelConfig } from '@/lib/types';
+
+export const DEFAULT_STORAGE_DIR = join(homedir(), '.aap');
+export const CONFIG_FILENAME = 'config.json';
+
+export const DEFAULT_CONFIG: AppConfig = {
+  models: [],
+  server: {
+    port: 8788,
+    host: '127.0.0.1',
+  },
+  adversarial: {
+    autoChallenge: {
+      enabled: true,
+      threshold: 0.7,
+      maxChallengesPerRound: 3,
+    },
+    voting: {
+      enabled: true,
+      mode: 'weighted',
+      threshold: 0.5,
+      tiebreaker: 'first',
+    },
+  },
+  storageDir: DEFAULT_STORAGE_DIR,
+};
+
+export function getConfigPath(storageDir = DEFAULT_STORAGE_DIR): string {
+  return join(storageDir, CONFIG_FILENAME);
+}
+
+export function ensureStorageDir(storageDir = DEFAULT_STORAGE_DIR): void {
+  if (!existsSync(storageDir)) {
+    mkdirSync(storageDir, { recursive: true });
+  }
+}
+
+export function loadConfig(storageDir = DEFAULT_STORAGE_DIR): AppConfig {
+  const path = getConfigPath(storageDir);
+  if (!existsSync(path)) {
+    return { ...DEFAULT_CONFIG, storageDir };
+  }
+  try {
+    const raw = readFileSync(path, 'utf-8');
+    const parsed = JSON.parse(raw) as Partial<AppConfig>;
+    return mergeWithDefaults(parsed, storageDir);
+  } catch (err) {
+    throw new Error(
+      `Failed to load config from ${path}: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+}
+
+export function saveConfig(config: AppConfig): void {
+  ensureStorageDir(config.storageDir);
+  const path = getConfigPath(config.storageDir);
+  writeFileSync(path, JSON.stringify(config, null, 2), 'utf-8');
+}
+
+function mergeWithDefaults(
+  partial: Partial<AppConfig>,
+  storageDir: string
+): AppConfig {
+  return {
+    models: partial.models ?? [],
+    server: {
+      ...DEFAULT_CONFIG.server,
+      ...(partial.server ?? {}),
+    },
+    adversarial: {
+      autoChallenge: {
+        ...DEFAULT_CONFIG.adversarial.autoChallenge,
+        ...(partial.adversarial?.autoChallenge ?? {}),
+      },
+      voting: {
+        ...DEFAULT_CONFIG.adversarial.voting,
+        ...(partial.adversarial?.voting ?? {}),
+      },
+    },
+    storageDir: partial.storageDir ?? storageDir,
+  };
+}
+
+// ========== Model CRUD ==========
+
+export function addModel(config: AppConfig, model: ModelConfig): AppConfig {
+  if (config.models.some(m => m.id === model.id)) {
+    throw new Error(`Model with id "${model.id}" already exists`);
+  }
+  return { ...config, models: [...config.models, model] };
+}
+
+export function removeModel(config: AppConfig, id: string): AppConfig {
+  return { ...config, models: config.models.filter(m => m.id !== id) };
+}
+
+export function updateModel(
+  config: AppConfig,
+  id: string,
+  patch: Partial<Omit<ModelConfig, 'id'>>
+): AppConfig {
+  const idx = config.models.findIndex(m => m.id === id);
+  if (idx === -1) {
+    throw new Error(`Model with id "${id}" not found`);
+  }
+  const updated = [...config.models];
+  updated[idx] = { ...updated[idx], ...patch };
+  return { ...config, models: updated };
+}
+
+export function getModel(config: AppConfig, id: string): ModelConfig | undefined {
+  return config.models.find(m => m.id === id);
+}
+
+export function getEnabledModels(config: AppConfig): ModelConfig[] {
+  return config.models.filter(m => m.enabled);
+}

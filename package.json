@@ -1,40 +1,36 @@
 {
   "name": "ai-adversarial-protocol",
-  "version": "0.1.0",
-  "private": true,
+  "version": "1.0.0",
+  "description": "Multi-model adversarial AI protocol - TUI + OpenAI/Anthropic compatible API",
+  "type": "module",
+  "bin": {
+    "aap": "dist/cli.js"
+  },
+  "main": "dist/cli.js",
   "scripts": {
-    "dev": "node scripts/run-next.mjs dev",
-    "build": "next build",
-    "start": "node scripts/run-next.mjs start",
-    "lint": "eslint",
+    "dev": "tsx src/cli.ts",
+    "build": "tsup",
+    "start": "node dist/cli.js",
     "type-check": "tsc --noEmit",
-    "test": "vitest",
-    "test:ui": "vitest --ui",
-    "test:coverage": "vitest --coverage"
+    "test": "vitest --run",
+    "test:watch": "vitest"
   },
   "dependencies": {
-    "next": "16.2.1",
-    "react": "19.2.4",
-    "react-dom": "19.2.4",
-    "swr": "^2.4.1",
-    "zustand": "^5.0.12"
+    "@hono/node-server": "^1.13.7",
+    "commander": "^12.1.0",
+    "hono": "^4.6.14",
+    "ink": "^5.1.0",
+    "ink-select-input": "^6.0.0",
+    "ink-spinner": "^5.0.0",
+    "ink-text-input": "^6.0.0",
+    "react": "^18.3.1"
   },
   "devDependencies": {
-    "@tailwindcss/postcss": "^4",
-    "@testing-library/jest-dom": "^6.9.1",
-    "@testing-library/react": "^16.3.2",
-    "@testing-library/user-event": "^14.6.1",
-    "@types/node": "^20",
-    "@types/react": "^19",
-    "@types/react-dom": "^19",
-    "@vitejs/plugin-react": "^6.0.1",
-    "@vitest/coverage-v8": "^4.1.1",
-    "@vitest/ui": "^4.1.1",
-    "eslint": "^9",
-    "eslint-config-next": "16.2.1",
-    "happy-dom": "^20.8.8",
-    "tailwindcss": "^4",
-    "typescript": "^5",
-    "vitest": "^4.1.1"
+    "@types/node": "^20.17.10",
+    "@types/react": "^18.3.18",
+    "tsup": "^8.3.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
   }
 }
