@@ -12,12 +12,28 @@ import {
   RunSnapshot,
   RunPhase,
   RoundStartEventData,
+  ToolCallEventData,
+  ModelWithdrawnEventData,
   Challenge,
   VotingResult,
   ModelResponse,
   PhaseChangeEventData,
 } from '@/lib/types';
 import { EngineHub } from '@/engine/EngineHub';
+
+export interface UIToolCall {
+  modelId: string;
+  toolName: string;
+  ok: boolean;
+  preview: string;
+  timestamp: number;
+}
+
+export interface UIWithdrawal {
+  modelId: string;
+  reason: string;
+  deferTo?: string;
+}
 
 export interface UIRunState {
   runId: string;
@@ -36,6 +52,8 @@ export interface UIRunState {
   error?: string;
   currentRound?: number;
   totalRounds?: number;
+  toolCalls: UIToolCall[];
+  withdrawals: UIWithdrawal[];
 }
 
 function emptyRunState(snapshot: RunSnapshot): UIRunState {
@@ -51,6 +69,8 @@ function emptyRunState(snapshot: RunSnapshot): UIRunState {
     modelErrors: {},
     challenges: [],
     startedAt: snapshot.startedAt,
+    toolCalls: [],
+    withdrawals: [],
   };
 }
 
@@ -149,6 +169,24 @@ export function useHub(hub: EngineHub) {
             next.modelOutputs = {};
             next.modelDone = {};
           }
+        } else if (event.type === 'tool-call') {
+          const data = event.data as ToolCallEventData;
+          next.toolCalls = [
+            ...next.toolCalls,
+            {
+              modelId: data.modelId,
+              toolName: data.toolName,
+              ok: data.ok,
+              preview: data.preview,
+              timestamp: event.timestamp,
+            },
+          ];
+        } else if (event.type === 'model-withdrawn') {
+          const data = event.data as ModelWithdrawnEventData;
+          next.withdrawals = [
+            ...next.withdrawals,
+            { modelId: data.modelId, reason: data.reason, deferTo: data.deferTo },
+          ];
         } else if (event.type === 'model-complete') {
           const { response } = event.data as { response: ModelResponse };
           next.modelDone = { ...next.modelDone, [response.modelId]: true };
