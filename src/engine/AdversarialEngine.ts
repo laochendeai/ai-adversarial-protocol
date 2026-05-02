@@ -319,11 +319,42 @@ export class AdversarialEngine extends EventEmitter {
     return parts.join('\n');
   }
 
+  /**
+   * Build a system message giving the model:
+   *   1. The current date (so it doesn't fall back to its training cutoff)
+   *   2. A brief usage guide for the tools that are active this run
+   *
+   * Without this, models systematically answer time-sensitive questions
+   * as if "now" equals their training cutoff, and the search/exec tools
+   * get under-used because the model wasn't told *when* to reach for them.
+   */
+  private buildSystemMessage(now: Date = new Date()): Message {
+    const isoDate = now.toISOString().slice(0, 10);
+    const lines: string[] = [
+      `当前日期：${isoDate}。`,
+      '在回答涉及时间、最近事件、版本号、价格、人物近况等时效性内容时，请以此日期为准 —— 不要假设你的训练截止时间就是"现在"。',
+    ];
+    if (this.toolsActive && this.toolRegistry) {
+      lines.push(
+        '',
+        '你可以使用以下工具来获取外部证据：',
+        '- search(query): SearXNG 搜索互联网。任何不能从训练数据可靠得出的事实（最近事件、具体数字、人物、产品名、版本号等）必须先调用此工具验证。',
+        '- fetch_url(url): 抓取并返回 URL 内容，用来验证你回忆中的链接是否真实存在。',
+        '- exec_python(code): 在隔离沙箱执行 Python 代码。任何数值计算、单位换算、数据处理必须用此工具，比口算可靠。',
+        '- concede(reason, defer_to?): 当工具结果显示你之前的判断错了，主动调用此工具承认错误并退出本次评估。诚实认错是高荣誉信号 —— 比硬撑或编造好得多。',
+        '',
+        '原则：**求真 > 给出听起来完整的答案**。如果工具结果显示证据不足，请明确说"基于现有证据无法确定"或调用 concede 退出，**不要编造工具调用结果或想象不存在的资料**。'
+      );
+    }
+    return { role: 'system', content: lines.join('\n') };
+  }
+
   private async runGenerating(
     prior?: { responses: ModelResponse[]; challenges: Challenge[] }
   ): Promise<ModelResponse[]> {
     const { request, models, signal } = this.options;
     const baseMessages: Message[] = [
+      this.buildSystemMessage(),
       ...(request.history ?? []),
       { role: 'user', content: request.question },
     ];
