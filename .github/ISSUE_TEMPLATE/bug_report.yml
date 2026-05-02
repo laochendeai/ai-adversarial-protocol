@@ -1,0 +1,81 @@
+name: 🐛 Bug Report
+description: 报告一个 bug 或意外行为
+title: "[Bug]: "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢报告！请提供足够细节以便复现。安全漏洞请走 [SECURITY.md](../blob/main/SECURITY.md) 私下渠道，不要发在这里。
+
+  - type: textarea
+    id: describe
+    attributes:
+      label: 描述
+      description: 简明扼要描述发生了什么、你预期什么。
+      placeholder: |
+        我跑 `aap probe` 之后，模型 X 被标记为 unsupported，但它显然支持 tool-calling……
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 复现步骤
+      description: 最小复现路径。如果有日志/截图请贴出来。
+      placeholder: |
+        1. `aap config add ...`
+        2. `aap probe`
+        3. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 预期行为
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: 实际行为 / 错误输出
+      render: shell
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: AAP 版本 / commit
+      placeholder: "git log -1 --format=%h 的输出 或 npm 包版本"
+    validations:
+      required: true
+
+  - type: input
+    id: node
+    attributes:
+      label: Node 版本
+      placeholder: "node -v"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: 操作系统
+      options:
+        - macOS
+        - Linux
+        - Windows (native)
+        - Windows + WSL2
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: 附加信息
+      description: 任何其他相关上下文（配置片段、相关 issue 链接等）。请脱敏 API key。
