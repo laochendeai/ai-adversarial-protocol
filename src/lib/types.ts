@@ -19,6 +19,13 @@ export interface ModelConfig {
   model: string;           // 上游真实模型名
   weight?: number;         // 投票权重，默认 1.0
   enabled: boolean;
+  /**
+   * tool-calling 能力声明：
+   *   - 'auto'（默认）：由 capability-probe 决定
+   *   - 'yes' / 'no'：用户强制覆盖
+   * 当 run 启用 tools 时，'no' 的模型会被剔除。
+   */
+  toolCallingSupport?: 'yes' | 'no' | 'auto';
 }
 
 // ========== 应用配置 ==========
@@ -42,6 +49,28 @@ export interface AdversarialConfig {
    * 投票仅基于最终轮回答。
    */
   maxRounds: number;
+
+  /**
+   * 工具调用 / 求真接地配置。tools.enabled 为 false 时，引擎走纯文本路径
+   * （和 Tier 1/2 行为完全一样）。
+   */
+  tools: {
+    enabled: boolean;
+    searxngUrl: string;          // SearXNG 端点，例：http://127.0.0.1:28080
+    searchEngines: string;        // 默认 "bing"
+    fetchUrl: { enabled: boolean; maxBytes: number; timeoutMs: number };
+    codeExec: {
+      enabled: boolean;
+      image: string;
+      timeoutMs: number;
+      memoryMb: number;
+      cpus: string;
+      wslDistro?: string;
+    };
+    concede: { enabled: boolean };
+    maxToolCallsPerGeneration: number;
+    capabilityCacheHours: number;
+  };
 }
 
 export interface ServerConfig {
@@ -73,6 +102,12 @@ export interface ModelResponse {
   durationMs: number;
   error?: string;
   thinkingBlocks?: ThinkingBlock[];
+  /** 模型在生成阶段调用的工具列表（仅 OpenAI tool-calling 通路填充） */
+  toolCalls?: Array<{ name: string; ok: boolean }>;
+  /** 模型本轮是否主动认错退出（concede 工具） */
+  withdrawn?: boolean;
+  withdrawnReason?: string;
+  withdrawnDeferTo?: string;
 }
 
 // ========== 思维过程 ==========
@@ -167,6 +202,8 @@ export interface RunRequest {
   enableAutoChallenge?: boolean; // 覆盖默认配置
   enableVoting?: boolean;
   maxRounds?: number;            // 覆盖默认 maxRounds
+  /** 覆盖 adversarial.tools.enabled —— 让单次 run 临时开/关工具 */
+  useTools?: boolean;
 }
 
 export interface RunSnapshot {
@@ -201,6 +238,8 @@ export type EngineEventType =
   | 'round-start'
   | 'chunk'
   | 'model-complete'
+  | 'tool-call'
+  | 'model-withdrawn'
   | 'challenge'
   | 'voting-result'
   | 'run-complete'
@@ -226,6 +265,20 @@ export interface PhaseChangeEventData {
 export interface RoundStartEventData {
   round: number;
   totalRounds: number;
+}
+
+export interface ToolCallEventData {
+  modelId: string;
+  toolName: string;
+  ok: boolean;
+  /** truncated to ~200 chars to avoid swamping the event bus */
+  preview: string;
+}
+
+export interface ModelWithdrawnEventData {
+  modelId: string;
+  reason: string;
+  deferTo?: string;
 }
 
 export interface ModelCompleteEventData {

@@ -4,6 +4,7 @@
  */
 
 import { Message, ModelConfig } from '@/lib/types';
+import { ToolDefinition } from '@/lib/tools/types';
 
 export interface StreamCallOptions {
   model: ModelConfig;
@@ -11,18 +12,31 @@ export interface StreamCallOptions {
   signal?: AbortSignal;
   onDelta?: (delta: string) => void;
   maxTokens?: number;
+  /** 工具定义，传入后请求体会带 tools 字段，模型可能返回 tool_calls。 */
+  tools?: ToolDefinition[];
+}
+
+export interface RawToolCall {
+  id: string;
+  name: string;
+  /** 累积的 arguments JSON 字符串。stream 阶段是片段拼接的结果。 */
+  argsJson: string;
 }
 
 export interface CallResult {
   content: string;
   tokensIn: number;
   tokensOut: number;
+  /** 模型这一轮发起的 tool calls。空数组表示模型直接回答没有调工具。 */
+  toolCalls: RawToolCall[];
+  /** OpenAI finish_reason: 'stop' | 'tool_calls' | 'length' | ... */
+  finishReason: string;
 }
 
 export async function callOpenAIProtocol(
   options: StreamCallOptions
 ): Promise<CallResult> {
-  const { model, messages, signal, onDelta, maxTokens = 4096 } = options;
+  const { model, messages, signal, onDelta, maxTokens = 4096, tools } = options;
 
   if (!model.apiKey) {
     throw new Error(`Model "${model.id}": API key is required for OpenAI protocol`);
@@ -31,12 +45,18 @@ export async function callOpenAIProtocol(
   const baseUrl = model.baseUrl.replace(/\/+$/, '');
   const endpoint = `${baseUrl}/chat/completions`;
 
-  const body = {
+  const body: Record<string, unknown> = {
     model: model.model,
-    messages: messages.map(m => ({ role: m.role, content: m.content })),
+    messages,
     stream: true,
     max_tokens: maxTokens,
   };
+  if (tools && tools.length > 0) {
+    body.tools = tools.map(t => ({
+      type: 'function',
+      function: { name: t.name, description: t.description, parameters: t.parameters },
+    }));
+  }
 
   const response = await fetch(endpoint, {
     method: 'POST',
@@ -65,6 +85,9 @@ export async function callOpenAIProtocol(
   let fullContent = '';
   let tokensIn = 0;
   let tokensOut = 0;
+  let finishReason = '';
+  // tool_calls 是按 index 累积的，每个 chunk 给一段 arguments
+  const toolCallsByIndex: Map<number, RawToolCall> = new Map();
 
   while (true) {
     const { done, value } = await reader.read();
@@ -82,10 +105,31 @@ export async function callOpenAIProtocol(
 
       try {
         const parsed = JSON.parse(payload);
-        const delta = parsed.choices?.[0]?.delta?.content;
+        const choice = parsed.choices?.[0];
+        const delta = choice?.delta?.content;
         if (typeof delta === 'string' && delta.length > 0) {
           fullContent += delta;
           onDelta?.(delta);
+        }
+        const toolCallsDelta = choice?.delta?.tool_calls;
+        if (Array.isArray(toolCallsDelta)) {
+          for (const tcd of toolCallsDelta) {
+            const idx = typeof tcd.index === 'number' ? tcd.index : 0;
+            let entry = toolCallsByIndex.get(idx);
+            if (!entry) {
+              entry = { id: tcd.id ?? `call_${idx}`, name: tcd.function?.name ?? '', argsJson: '' };
+              toolCallsByIndex.set(idx, entry);
+            } else {
+              if (tcd.id) entry.id = tcd.id;
+              if (tcd.function?.name) entry.name = tcd.function.name;
+            }
+            if (typeof tcd.function?.arguments === 'string') {
+              entry.argsJson += tcd.function.arguments;
+            }
+          }
+        }
+        if (typeof choice?.finish_reason === 'string' && choice.finish_reason) {
+          finishReason = choice.finish_reason;
         }
         if (parsed.usage) {
           tokensIn = parsed.usage.prompt_tokens ?? tokensIn;
@@ -103,7 +147,18 @@ export async function callOpenAIProtocol(
     tokensOut = est.tokensOut;
   }
 
-  return { content: fullContent, tokensIn, tokensOut };
+  const toolCalls = [...toolCallsByIndex.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([, c]) => c)
+    .filter(c => c.name);
+
+  return {
+    content: fullContent,
+    tokensIn,
+    tokensOut,
+    toolCalls,
+    finishReason: finishReason || (toolCalls.length > 0 ? 'tool_calls' : 'stop'),
+  };
 }
 
 /**
@@ -112,7 +167,7 @@ export async function callOpenAIProtocol(
 export async function callOpenAIProtocolNonStream(
   model: ModelConfig,
   messages: Message[],
-  options: { signal?: AbortSignal; maxTokens?: number } = {}
+  options: { signal?: AbortSignal; maxTokens?: number; tools?: ToolDefinition[] } = {}
 ): Promise<CallResult> {
   if (!model.apiKey) {
     throw new Error(`Model "${model.id}": API key is required for OpenAI protocol`);
@@ -121,18 +176,26 @@ export async function callOpenAIProtocolNonStream(
   const baseUrl = model.baseUrl.replace(/\/+$/, '');
   const endpoint = `${baseUrl}/chat/completions`;
 
+  const body: Record<string, unknown> = {
+    model: model.model,
+    messages,
+    stream: false,
+    max_tokens: options.maxTokens ?? 4096,
+  };
+  if (options.tools && options.tools.length > 0) {
+    body.tools = options.tools.map(t => ({
+      type: 'function',
+      function: { name: t.name, description: t.description, parameters: t.parameters },
+    }));
+  }
+
   const response = await fetch(endpoint, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${model.apiKey}`,
     },
-    body: JSON.stringify({
-      model: model.model,
-      messages: messages.map(m => ({ role: m.role, content: m.content })),
-      stream: false,
-      max_tokens: options.maxTokens ?? 4096,
-    }),
+    body: JSON.stringify(body),
     signal: options.signal,
   });
 
@@ -144,18 +207,35 @@ export async function callOpenAIProtocolNonStream(
   }
 
   const data = (await response.json()) as {
-    choices?: Array<{ message?: { content?: string } }>;
+    choices?: Array<{
+      message?: {
+        content?: string;
+        tool_calls?: Array<{ id: string; function?: { name?: string; arguments?: string } }>;
+      };
+      finish_reason?: string;
+    }>;
     usage?: { prompt_tokens?: number; completion_tokens?: number };
   };
+  const message = data.choices?.[0]?.message;
+  const toolCalls: RawToolCall[] = (message?.tool_calls ?? []).map(tc => ({
+    id: tc.id,
+    name: tc.function?.name ?? '',
+    argsJson: tc.function?.arguments ?? '',
+  })).filter(t => t.name);
   return {
-    content: data.choices?.[0]?.message?.content ?? '',
+    content: message?.content ?? '',
     tokensIn: data.usage?.prompt_tokens ?? 0,
     tokensOut: data.usage?.completion_tokens ?? 0,
+    toolCalls,
+    finishReason: data.choices?.[0]?.finish_reason ?? 'stop',
   };
 }
 
 function estimateTokens(messages: Message[], output: string) {
-  const inputChars = messages.reduce((sum, m) => sum + m.content.length, 0);
+  const inputChars = messages.reduce(
+    (sum, m) => sum + (typeof m.content === 'string' ? m.content.length : 0),
+    0
+  );
   return {
     tokensIn: Math.ceil(inputChars / 2.5),
     tokensOut: Math.ceil(output.length / 2.5),

@@ -79,7 +79,7 @@ export async function callOllamaProtocol(
     tokensOut = est.tokensOut;
   }
 
-  return { content: fullContent, tokensIn, tokensOut };
+  return { content: fullContent, tokensIn, tokensOut, toolCalls: [], finishReason: 'stop' };
 }
 
 export async function callOllamaProtocolNonStream(
@@ -117,6 +117,8 @@ export async function callOllamaProtocolNonStream(
     content: data.message?.content ?? '',
     tokensIn: data.prompt_eval_count ?? 0,
     tokensOut: data.eval_count ?? 0,
+    toolCalls: [],
+    finishReason: 'stop',
   };
 }
 

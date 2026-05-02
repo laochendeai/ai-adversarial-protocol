@@ -20,6 +20,8 @@ import { EngineHub } from '@/engine/EngineHub';
 import { startServer } from '@/server/index';
 import { App } from '@/tui/App';
 import { listOpenAIModels, listOllamaModels } from '@/lib/clients/discovery';
+import { probeToolCalling } from '@/engine/capability-probe';
+import { setCapability, loadCapabilityCache } from '@/engine/capability-cache';
 
 const program = new Command();
 program
@@ -187,6 +189,69 @@ configCmd
     const cfg = loadConfig();
     saveConfig(cfg);
     console.log(`✓ 配置已初始化: ${cfg.storageDir}/config.json`);
+  });
+
+// ===== probe / tools 命令（求真模式） =====
+
+program
+  .command('probe [ids...]')
+  .description('探测每个模型对 tool-calling 的支持（结果缓存到 ~/.aap/capabilities.json）')
+  .option('--all', '探测所有 enabled 模型，忽略 ids 参数')
+  .action(async (ids: string[], opts: { all?: boolean }) => {
+    const cfg = loadConfig();
+    const targets = opts.all || ids.length === 0
+      ? cfg.models.filter(m => m.enabled)
+      : cfg.models.filter(m => ids.includes(m.id));
+    if (targets.length === 0) {
+      console.error('没有匹配的模型');
+      process.exit(1);
+    }
+    console.log(`将探测 ${targets.length} 个模型的 tool-calling 能力，请稍候…\n`);
+    let supported = 0;
+    let unsupported = 0;
+    for (const m of targets) {
+      process.stdout.write(`  ${m.id.padEnd(40)} ... `);
+      const result = await probeToolCalling(m);
+      setCapability(cfg.storageDir, m.id, result);
+      if (result.supported) {
+        supported++;
+        console.log(`[32m✓ supported[0m  (${result.latencyMs}ms)`);
+      } else {
+        unsupported++;
+        console.log(`[31m✗ no[0m  ${result.reason}`);
+      }
+    }
+    console.log(`\n汇总：${supported} 支持 · ${unsupported} 不支持 · 缓存 ${cfg.adversarial.tools.capabilityCacheHours}h`);
+  });
+
+const toolsCmd = program.command('tools').description('查看工具运行时状态');
+
+toolsCmd
+  .command('list')
+  .description('显示当前 tools 配置 + 各模型 tool-calling 状态')
+  .action(() => {
+    const cfg = loadConfig();
+    const t = cfg.adversarial.tools;
+    console.log(`tools.enabled: ${t.enabled ? '[32mtrue[0m' : '[33mfalse[0m'}`);
+    console.log(`  searxng:    ${t.searxngUrl}  (engines: ${t.searchEngines})`);
+    console.log(`  fetch_url:  ${t.fetchUrl.enabled ? 'on' : 'off'}  (max ${t.fetchUrl.maxBytes}B)`);
+    console.log(`  exec_python: ${t.codeExec.enabled ? 'on' : 'off'}  (${t.codeExec.image}, ${t.codeExec.timeoutMs}ms${t.codeExec.wslDistro ? ', wsl='+t.codeExec.wslDistro : ''})`);
+    console.log(`  concede:    ${t.concede.enabled ? 'on' : 'off'}`);
+    console.log(`  max calls per generation: ${t.maxToolCallsPerGeneration}`);
+    console.log();
+
+    const cache = loadCapabilityCache(cfg.storageDir);
+    console.log(`模型 tool-calling 状态：`);
+    for (const m of cfg.models) {
+      const cached = cache.models[m.id];
+      let status: string;
+      if (m.toolCallingSupport === 'yes') status = '[32m✓ forced-yes[0m';
+      else if (m.toolCallingSupport === 'no') status = '[31m✗ forced-no[0m';
+      else if (!cached) status = '[90m? not-probed[0m';
+      else if (cached.supported) status = '[32m✓ supported[0m';
+      else status = `[31m✗ no[0m (${cached.reason.slice(0, 60)})`;
+      console.log(`  ${m.id.padEnd(40)} ${status}`);
+    }
   });
 
 program.parseAsync().catch(err => {
