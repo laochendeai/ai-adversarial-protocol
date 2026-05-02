@@ -3,6 +3,7 @@ import { Box, Text } from 'ink';
 import { UIRunState } from '@/tui/hooks/useHub';
 import { ModelPanel } from './ModelPanel';
 import { PhaseIndicator } from './PhaseIndicator';
+import { ToolCallView } from './ToolCallView';
 import { ChallengeView } from './ChallengeView';
 import { VoteView } from './VoteView';
 
@@ -53,6 +54,7 @@ export function RunDetailView({ run, width, rows }: Props) {
           maxContentRows={maxContentRows}
         />
       )}
+      <ToolCallView toolCalls={run.toolCalls} withdrawals={run.withdrawals} />
       <ChallengeView challenges={run.challenges} />
       <VoteView result={run.voting} />
       {run.error && (
