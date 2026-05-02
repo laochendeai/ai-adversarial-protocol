@@ -7,17 +7,32 @@ interface Props {
   run: UIRunState;
   modelIds: string[];
   width: number;
+  maxContentRows?: number;
 }
 
-const MAX_CHARS = 800;
-
-function truncate(s: string): string {
-  if (s.length <= MAX_CHARS) return s;
-  return '...' + s.slice(-MAX_CHARS);
+function tail(text: string, maxRows: number, colWidth: number): { shown: string; hidden: number } {
+  if (!text) return { shown: '', hidden: 0 };
+  // Approximate visual rows: split by hard newlines, then estimate wrapping per
+  // line. We work backward from the end so the user always sees the freshest
+  // tokens; older lines get a "+N hidden" indicator.
+  const lines: string[] = [];
+  for (const hard of text.split('\n')) {
+    if (hard.length <= colWidth) {
+      lines.push(hard);
+    } else {
+      for (let i = 0; i < hard.length; i += colWidth) {
+        lines.push(hard.slice(i, i + colWidth));
+      }
+    }
+  }
+  if (lines.length <= maxRows) return { shown: text, hidden: 0 };
+  const keep = lines.slice(lines.length - maxRows);
+  return { shown: keep.join('\n'), hidden: lines.length - keep.length };
 }
 
-export function ModelPanel({ run, modelIds, width }: Props) {
+export function ModelPanel({ run, modelIds, width, maxContentRows = 12 }: Props) {
   const colWidth = Math.max(20, Math.floor((width - 4) / Math.max(1, modelIds.length)) - 1);
+  const contentWidth = Math.max(10, colWidth - 2);
 
   return (
     <Box flexDirection="row" borderStyle="round" borderColor="gray">
@@ -27,6 +42,7 @@ export function ModelPanel({ run, modelIds, width }: Props) {
         const error = run.modelErrors[id];
         const dur = run.modelDuration[id];
         const tokens = run.modelTokens[id];
+        const { shown, hidden } = tail(out, maxContentRows, contentWidth);
         return (
           <Box
             key={id}
@@ -58,8 +74,13 @@ export function ModelPanel({ run, modelIds, width }: Props) {
                 {dur ? `${dur}ms` : '...'} | {tokens ?? 0} tk
               </Text>
             </Box>
-            <Box marginTop={1} flexGrow={1}>
-              <Text wrap="wrap">{error ? `ERROR: ${error}` : truncate(out) || '(等待输出...)'}</Text>
+            {hidden > 0 && (
+              <Box>
+                <Text dimColor>↑ {hidden} 行已隐藏</Text>
+              </Box>
+            )}
+            <Box marginTop={hidden > 0 ? 0 : 1} flexGrow={1}>
+              <Text wrap="wrap">{error ? `ERROR: ${error}` : shown || '(等待输出...)'}</Text>
             </Box>
           </Box>
         );
@@ -67,3 +88,4 @@ export function ModelPanel({ run, modelIds, width }: Props) {
     </Box>
   );
 }
+

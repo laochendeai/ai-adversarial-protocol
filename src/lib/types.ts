@@ -35,6 +35,13 @@ export interface AdversarialConfig {
     threshold: number;
     tiebreaker: 'first' | 'random' | 'abstain';
   };
+  /**
+   * 每个 run 中各模型回答的轮数（≥1）。
+   *   round 1: 各模型独立作答；
+   *   round n>1: 在 prompt 中追加上一轮全部回答 + 挑刺，让模型基于上下文修正。
+   * 投票仅基于最终轮回答。
+   */
+  maxRounds: number;
 }
 
 export interface ServerConfig {
@@ -159,6 +166,7 @@ export interface RunRequest {
   source: RunSource;
   enableAutoChallenge?: boolean; // 覆盖默认配置
   enableVoting?: boolean;
+  maxRounds?: number;            // 覆盖默认 maxRounds
 }
 
 export interface RunSnapshot {
@@ -166,12 +174,14 @@ export interface RunSnapshot {
   source: RunSource;
   request: RunRequest;
   phase: RunPhase;
-  responses: Record<string, ModelResponse>;  // modelId → response
-  challenges: Challenge[];
+  responses: Record<string, ModelResponse>;  // modelId → 最终轮 response
+  challenges: Challenge[];                    // 最终轮的挑刺
   voting?: VotingResult;
   startedAt: number;
   finishedAt?: number;
   error?: string;
+  currentRound?: number;        // 1-based，仅 multi-round
+  totalRounds?: number;
 }
 
 export interface RunResult {
@@ -188,6 +198,7 @@ export interface RunResult {
 export type EngineEventType =
   | 'run-start'
   | 'phase-change'
+  | 'round-start'
   | 'chunk'
   | 'model-complete'
   | 'challenge'
@@ -210,6 +221,11 @@ export interface ChunkEventData {
 
 export interface PhaseChangeEventData {
   phase: RunPhase;
+}
+
+export interface RoundStartEventData {
+  round: number;
+  totalRounds: number;
 }
 
 export interface ModelCompleteEventData {

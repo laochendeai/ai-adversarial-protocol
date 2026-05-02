@@ -89,31 +89,53 @@ export class AdversarialEngine extends EventEmitter {
 
   async run(): Promise<RunResult> {
     const start = Date.now();
+    const maxRounds = Math.max(
+      1,
+      this.options.request.maxRounds ?? this.options.adversarialConfig.maxRounds ?? 1
+    );
+    this.snapshot.totalRounds = maxRounds;
+
     try {
       this.snapshot.phase = 'pending';
       this.emitEvent('run-start', { request: this.options.request, models: this.options.models });
 
-      // ==== Phase 1: Generating ====
-      this.snapshot.phase = 'generating';
-      this.emitEvent('phase-change', { phase: 'generating' });
-
-      const responses = await this.runGenerating();
-      responses.forEach(r => {
-        this.snapshot.responses[r.modelId] = r;
-      });
-
-      // ==== Phase 2: Auto-Challenge ====
+      let responses: ModelResponse[] = [];
+      let challenges: Challenge[] = [];
       const enableAC =
         this.options.request.enableAutoChallenge ??
         this.options.adversarialConfig.autoChallenge.enabled;
-      if (enableAC && responses.filter(r => !r.error).length >= 2) {
-        this.snapshot.phase = 'auto-challenge';
-        this.emitEvent('phase-change', { phase: 'auto-challenge' });
-        const challenges = await this.runAutoChallenge(responses);
-        this.snapshot.challenges = challenges;
+
+      for (let round = 1; round <= maxRounds; round++) {
+        this.snapshot.currentRound = round;
+        this.emitEvent('round-start', { round, totalRounds: maxRounds });
+
+        // ==== Phase: Generating ====
+        this.snapshot.phase = 'generating';
+        this.emitEvent('phase-change', { phase: 'generating' });
+
+        const prior = round > 1 ? { responses, challenges } : undefined;
+        responses = await this.runGenerating(prior);
+        // Snapshot reflects the latest round only.
+        this.snapshot.responses = {};
+        responses.forEach(r => {
+          this.snapshot.responses[r.modelId] = r;
+        });
+
+        // ==== Phase: Auto-Challenge ====
+        // Run challenges every round so round n+1 can refine off them.
+        // On the final round we still record them so the UI can show them.
+        if (enableAC && responses.filter(r => !r.error).length >= 2) {
+          this.snapshot.phase = 'auto-challenge';
+          this.emitEvent('phase-change', { phase: 'auto-challenge' });
+          challenges = await this.runAutoChallenge(responses);
+          this.snapshot.challenges = challenges;
+        } else {
+          challenges = [];
+          this.snapshot.challenges = [];
+        }
       }
 
-      // ==== Phase 3: Voting ====
+      // ==== Phase: Voting (only on final round responses) ====
       const enableV =
         this.options.request.enableVoting ??
         this.options.adversarialConfig.voting.enabled;
@@ -126,9 +148,6 @@ export class AdversarialEngine extends EventEmitter {
       }
 
       // ==== Audit Metrics ====
-      // Compute synchronously so the result emitted to SSE/TUI carries the
-      // up-to-date scores. The actual disk flush is fire-and-forget so it
-      // doesn't keep clients waiting on the run-complete/[DONE] signal.
       const metrics = this.computeAuditMetrics(responses, this.snapshot.challenges);
 
       this.snapshot.phase = 'complete';
@@ -145,7 +164,6 @@ export class AdversarialEngine extends EventEmitter {
       };
       this.emitEvent('run-complete', { result });
 
-      // Background-flush metrics; failures only warn, run is already done.
       this.flushAuditMetrics(metrics).catch(err => {
         // eslint-disable-next-line no-console
         console.warn(`[run ${this.runId}] audit metrics flush failed:`, err);
@@ -161,19 +179,56 @@ export class AdversarialEngine extends EventEmitter {
     }
   }
 
-  private async runGenerating(): Promise<ModelResponse[]> {
+  private buildRefinementMessage(
+    prevResponses: ModelResponse[],
+    prevChallenges: Challenge[]
+  ): string {
+    const parts: string[] = ['【上一轮各模型给出的回答】'];
+    for (const r of prevResponses) {
+      const model = this.modelMap.get(r.modelId);
+      const display = model?.id ?? r.modelId;
+      const body = r.error ? `(本轮失败: ${r.error})` : r.content;
+      parts.push(`\n— 模型 ${display} —\n${body}`);
+    }
+    if (prevChallenges.length > 0) {
+      parts.push('\n\n【上一轮模型间的相互挑刺】');
+      for (const c of prevChallenges) {
+        parts.push(
+          `- ${c.challengerId} → ${c.targetId} [${c.type}/${c.severity}]: ${c.reason}`
+        );
+      }
+    }
+    parts.push(
+      '\n请基于以上信息修正和完善你对原问题的回答。如果之前有错误或遗漏，请直接更正；' +
+        '如果你认为之前回答仍然成立，可以重申并补充论据。直接给出新的完整回答，不要用 "我同意" 之类的元评论开头。'
+    );
+    return parts.join('\n');
+  }
+
+  private async runGenerating(
+    prior?: { responses: ModelResponse[]; challenges: Challenge[] }
+  ): Promise<ModelResponse[]> {
     const { request, models, signal } = this.options;
     const baseMessages: Message[] = [
       ...(request.history ?? []),
       { role: 'user', content: request.question },
     ];
+    const messages: Message[] = prior
+      ? [
+          ...baseMessages,
+          {
+            role: 'user',
+            content: this.buildRefinementMessage(prior.responses, prior.challenges),
+          },
+        ]
+      : baseMessages;
 
     return Promise.all(
       models.map(async model => {
         let contentSoFar = '';
         const response = await streamModel({
           model,
-          messages: baseMessages,
+          messages,
           signal,
           onDelta: delta => {
             contentSoFar += delta;

@@ -29,6 +29,7 @@ export const DEFAULT_CONFIG: AppConfig = {
       threshold: 0.5,
       tiebreaker: 'first',
     },
+    maxRounds: 2,
   },
   storageDir: DEFAULT_STORAGE_DIR,
 };
@@ -84,6 +85,8 @@ function mergeWithDefaults(
         ...DEFAULT_CONFIG.adversarial.voting,
         ...(partial.adversarial?.voting ?? {}),
       },
+      maxRounds:
+        partial.adversarial?.maxRounds ?? DEFAULT_CONFIG.adversarial.maxRounds,
     },
     storageDir: partial.storageDir ?? storageDir,
   };
