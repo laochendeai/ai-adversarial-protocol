@@ -28,6 +28,19 @@ import {
   AuditMetrics,
 } from '@/lib/types';
 import { streamModel, callModelNonStream } from '@/engine/ModelClient';
+import { streamWithTools } from '@/lib/clients/openai-tool-loop';
+import { ToolRegistry } from '@/lib/tools/registry';
+import { searchToolDef, makeSearchHandler } from '@/lib/tools/search';
+import { fetchUrlToolDef, makeFetchUrlHandler } from '@/lib/tools/fetch';
+import { execPythonToolDef, makeExecPythonHandler } from '@/lib/tools/code-exec';
+import {
+  concedeToolDef,
+  makeConcedeHandler,
+  InMemoryConcessionTracker,
+  ConcessionTracker,
+} from '@/lib/tools/concede';
+import { getCapability, setCapability } from '@/engine/capability-cache';
+import { probeToolCalling } from '@/engine/capability-probe';
 import {
   generateAutoChallengePrompt,
   parseChallengeResponse,
@@ -59,6 +72,9 @@ export class AdversarialEngine extends EventEmitter {
   readonly snapshot: RunSnapshot;
   private readonly modelMap: Map<string, ModelConfig>;
   private readonly options: AdversarialEngineOptions;
+  private toolsActive: boolean;
+  private readonly toolRegistry?: ToolRegistry;
+  private readonly concessions: ConcessionTracker;
 
   constructor(options: AdversarialEngineOptions) {
     super();
@@ -74,6 +90,98 @@ export class AdversarialEngine extends EventEmitter {
       challenges: [],
       startedAt: Date.now(),
     };
+
+    this.toolsActive =
+      (options.request.useTools ?? options.adversarialConfig.tools?.enabled) === true;
+    this.concessions = new InMemoryConcessionTracker();
+
+    if (this.toolsActive) {
+      this.toolRegistry = this.buildToolRegistry();
+    }
+  }
+
+  private buildToolRegistry(): ToolRegistry {
+    const cfg = this.options.adversarialConfig.tools;
+    const reg = new ToolRegistry();
+
+    reg.register(
+      searchToolDef,
+      makeSearchHandler({ baseUrl: cfg.searxngUrl, engines: cfg.searchEngines })
+    );
+    if (cfg.fetchUrl.enabled) {
+      reg.register(
+        fetchUrlToolDef,
+        makeFetchUrlHandler({ maxBytes: cfg.fetchUrl.maxBytes, timeoutMs: cfg.fetchUrl.timeoutMs })
+      );
+    }
+    if (cfg.codeExec.enabled) {
+      reg.register(
+        execPythonToolDef,
+        makeExecPythonHandler({
+          image: cfg.codeExec.image,
+          timeoutMs: cfg.codeExec.timeoutMs,
+          memoryMb: cfg.codeExec.memoryMb,
+          cpus: cfg.codeExec.cpus,
+          wslDistro: cfg.codeExec.wslDistro,
+        })
+      );
+    }
+    if (cfg.concede.enabled) {
+      reg.register(concedeToolDef, makeConcedeHandler(this.concessions));
+    }
+    return reg;
+  }
+
+  private async applyCapabilityFiltering(): Promise<void> {
+    const cfg = this.options.adversarialConfig.tools;
+    const ttl = cfg.capabilityCacheHours;
+    const storage = this.options.storageDir;
+    const keep: ModelConfig[] = [];
+    const dropped: { id: string; reason: string }[] = [];
+
+    for (const model of this.options.models) {
+      if (model.toolCallingSupport === 'yes') {
+        keep.push(model);
+        continue;
+      }
+      if (model.toolCallingSupport === 'no') {
+        dropped.push({ id: model.id, reason: 'config: toolCallingSupport=no' });
+        continue;
+      }
+      // 走缓存或现场探测
+      let cached = getCapability(storage, model.id, ttl);
+      if (!cached) {
+        const result = await probeToolCalling(model);
+        setCapability(storage, model.id, result);
+        cached = result;
+      }
+      if (cached.supported) {
+        keep.push(model);
+      } else {
+        dropped.push({ id: model.id, reason: cached.reason });
+      }
+    }
+
+    if (dropped.length > 0) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[run ${this.runId}] tools enabled — dropped ${dropped.length} model(s) without tool-calling support: ` +
+          dropped.map(d => `${d.id} (${d.reason})`).join('; ')
+      );
+    }
+
+    if (keep.length < 2) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[run ${this.runId}] only ${keep.length} model(s) support tool-calling; falling back to text-only mode`
+      );
+      this.toolsActive = false;
+      return;
+    }
+
+    (this.options as { models: ModelConfig[] }).models = keep;
+    this.modelMap.clear();
+    for (const m of keep) this.modelMap.set(m.id, m);
   }
 
   private emitEvent(type: EngineEventType, data: unknown) {
@@ -89,31 +197,59 @@ export class AdversarialEngine extends EventEmitter {
 
   async run(): Promise<RunResult> {
     const start = Date.now();
+    const maxRounds = Math.max(
+      1,
+      this.options.request.maxRounds ?? this.options.adversarialConfig.maxRounds ?? 1
+    );
+    this.snapshot.totalRounds = maxRounds;
+
     try {
       this.snapshot.phase = 'pending';
       this.emitEvent('run-start', { request: this.options.request, models: this.options.models });
 
-      // ==== Phase 1: Generating ====
-      this.snapshot.phase = 'generating';
-      this.emitEvent('phase-change', { phase: 'generating' });
+      // ==== 工具能力过滤 ====
+      // 启用 tools 时，剔除不支持 tool-calling 的模型；只剩 < 2 个则放弃工具模式。
+      if (this.toolsActive) {
+        await this.applyCapabilityFiltering();
+      }
 
-      const responses = await this.runGenerating();
-      responses.forEach(r => {
-        this.snapshot.responses[r.modelId] = r;
-      });
-
-      // ==== Phase 2: Auto-Challenge ====
+      let responses: ModelResponse[] = [];
+      let challenges: Challenge[] = [];
       const enableAC =
         this.options.request.enableAutoChallenge ??
         this.options.adversarialConfig.autoChallenge.enabled;
-      if (enableAC && responses.filter(r => !r.error).length >= 2) {
-        this.snapshot.phase = 'auto-challenge';
-        this.emitEvent('phase-change', { phase: 'auto-challenge' });
-        const challenges = await this.runAutoChallenge(responses);
-        this.snapshot.challenges = challenges;
+
+      for (let round = 1; round <= maxRounds; round++) {
+        this.snapshot.currentRound = round;
+        this.emitEvent('round-start', { round, totalRounds: maxRounds });
+
+        // ==== Phase: Generating ====
+        this.snapshot.phase = 'generating';
+        this.emitEvent('phase-change', { phase: 'generating' });
+
+        const prior = round > 1 ? { responses, challenges } : undefined;
+        responses = await this.runGenerating(prior);
+        // Snapshot reflects the latest round only.
+        this.snapshot.responses = {};
+        responses.forEach(r => {
+          this.snapshot.responses[r.modelId] = r;
+        });
+
+        // ==== Phase: Auto-Challenge ====
+        // Run challenges every round so round n+1 can refine off them.
+        // On the final round we still record them so the UI can show them.
+        if (enableAC && responses.filter(r => !r.error).length >= 2) {
+          this.snapshot.phase = 'auto-challenge';
+          this.emitEvent('phase-change', { phase: 'auto-challenge' });
+          challenges = await this.runAutoChallenge(responses);
+          this.snapshot.challenges = challenges;
+        } else {
+          challenges = [];
+          this.snapshot.challenges = [];
+        }
       }
 
-      // ==== Phase 3: Voting ====
+      // ==== Phase: Voting (only on final round responses) ====
       const enableV =
         this.options.request.enableVoting ??
         this.options.adversarialConfig.voting.enabled;
@@ -126,9 +262,6 @@ export class AdversarialEngine extends EventEmitter {
       }
 
       // ==== Audit Metrics ====
-      // Compute synchronously so the result emitted to SSE/TUI carries the
-      // up-to-date scores. The actual disk flush is fire-and-forget so it
-      // doesn't keep clients waiting on the run-complete/[DONE] signal.
       const metrics = this.computeAuditMetrics(responses, this.snapshot.challenges);
 
       this.snapshot.phase = 'complete';
@@ -145,7 +278,6 @@ export class AdversarialEngine extends EventEmitter {
       };
       this.emitEvent('run-complete', { result });
 
-      // Background-flush metrics; failures only warn, run is already done.
       this.flushAuditMetrics(metrics).catch(err => {
         // eslint-disable-next-line no-console
         console.warn(`[run ${this.runId}] audit metrics flush failed:`, err);
@@ -161,32 +293,174 @@ export class AdversarialEngine extends EventEmitter {
     }
   }
 
-  private async runGenerating(): Promise<ModelResponse[]> {
+  private buildRefinementMessage(
+    prevResponses: ModelResponse[],
+    prevChallenges: Challenge[]
+  ): string {
+    const parts: string[] = ['【上一轮各模型给出的回答】'];
+    for (const r of prevResponses) {
+      const model = this.modelMap.get(r.modelId);
+      const display = model?.id ?? r.modelId;
+      const body = r.error ? `(本轮失败: ${r.error})` : r.content;
+      parts.push(`\n— 模型 ${display} —\n${body}`);
+    }
+    if (prevChallenges.length > 0) {
+      parts.push('\n\n【上一轮模型间的相互挑刺】');
+      for (const c of prevChallenges) {
+        parts.push(
+          `- ${c.challengerId} → ${c.targetId} [${c.type}/${c.severity}]: ${c.reason}`
+        );
+      }
+    }
+    parts.push(
+      '\n请基于以上信息修正和完善你对原问题的回答。如果之前有错误或遗漏，请直接更正；' +
+        '如果你认为之前回答仍然成立，可以重申并补充论据。直接给出新的完整回答，不要用 "我同意" 之类的元评论开头。'
+    );
+    return parts.join('\n');
+  }
+
+  /**
+   * Build a system message giving the model:
+   *   1. The current date (so it doesn't fall back to its training cutoff)
+   *   2. A brief usage guide for the tools that are active this run
+   *
+   * Without this, models systematically answer time-sensitive questions
+   * as if "now" equals their training cutoff, and the search/exec tools
+   * get under-used because the model wasn't told *when* to reach for them.
+   */
+  private buildSystemMessage(now: Date = new Date()): Message {
+    const isoDate = now.toISOString().slice(0, 10);
+    const lines: string[] = [
+      `当前日期：${isoDate}。`,
+      '在回答涉及时间、最近事件、版本号、价格、人物近况等时效性内容时，请以此日期为准 —— 不要假设你的训练截止时间就是"现在"。',
+    ];
+    if (this.toolsActive && this.toolRegistry) {
+      lines.push(
+        '',
+        '你可以使用以下工具来获取外部证据：',
+        '- search(query): SearXNG 搜索互联网。任何不能从训练数据可靠得出的事实（最近事件、具体数字、人物、产品名、版本号等）必须先调用此工具验证。',
+        '- fetch_url(url): 抓取并返回 URL 内容，用来验证你回忆中的链接是否真实存在。',
+        '- exec_python(code): 在隔离沙箱执行 Python 代码。任何数值计算、单位换算、数据处理必须用此工具，比口算可靠。',
+        '- concede(reason, defer_to?): 当工具结果显示你之前的判断错了，主动调用此工具承认错误并退出本次评估。诚实认错是高荣誉信号 —— 比硬撑或编造好得多。',
+        '',
+        '原则：**求真 > 给出听起来完整的答案**。如果工具结果显示证据不足，请明确说"基于现有证据无法确定"或调用 concede 退出，**不要编造工具调用结果或想象不存在的资料**。'
+      );
+    }
+    return { role: 'system', content: lines.join('\n') };
+  }
+
+  private async runGenerating(
+    prior?: { responses: ModelResponse[]; challenges: Challenge[] }
+  ): Promise<ModelResponse[]> {
     const { request, models, signal } = this.options;
     const baseMessages: Message[] = [
+      this.buildSystemMessage(),
       ...(request.history ?? []),
       { role: 'user', content: request.question },
     ];
+    const messages: Message[] = prior
+      ? [
+          ...baseMessages,
+          {
+            role: 'user',
+            content: this.buildRefinementMessage(prior.responses, prior.challenges),
+          },
+        ]
+      : baseMessages;
+
+    const useTools = this.toolsActive && this.toolRegistry !== undefined;
 
     return Promise.all(
       models.map(async model => {
+        // 已退出模型不参与新一轮
+        if (this.concessions.isWithdrawn(model.id)) {
+          return {
+            modelId: model.id,
+            content: '(已退出本次评估)',
+            tokensIn: 0,
+            tokensOut: 0,
+            durationMs: 0,
+            withdrawn: true,
+            withdrawnReason: '主动认错退出',
+          } as ModelResponse;
+        }
+
+        const start = Date.now();
         let contentSoFar = '';
-        const response = await streamModel({
-          model,
-          messages: baseMessages,
-          signal,
-          onDelta: delta => {
-            contentSoFar += delta;
-            const data: ChunkEventData = {
+        const onDelta = (delta: string) => {
+          contentSoFar += delta;
+          const data: ChunkEventData = {
+            modelId: model.id,
+            delta,
+            contentSoFar,
+          };
+          this.emitEvent('chunk', data);
+        };
+
+        try {
+          if (useTools && model.protocol === 'openai') {
+            const result = await streamWithTools({
+              model,
+              messages,
+              tools: this.toolRegistry!.list(),
+              registry: this.toolRegistry!,
+              ctx: { modelId: model.id, runId: this.runId, signal },
+              signal,
+              maxIterations: this.options.adversarialConfig.tools.maxToolCallsPerGeneration,
+              onDelta,
+              onToolCall: (call, dispatched) => {
+                this.emitEvent('tool-call', {
+                  modelId: model.id,
+                  toolName: call.name,
+                  ok: dispatched.ok,
+                  preview: ((dispatched.content ?? dispatched.error) ?? '').slice(0, 200),
+                });
+              },
+              isWithdrawn: () => this.concessions.isWithdrawn(model.id),
+            });
+            const conc = this.concessions.list().find(c => c.modelId === model.id);
+            const resp: ModelResponse = {
               modelId: model.id,
-              delta,
-              contentSoFar,
+              content: result.content,
+              tokensIn: result.tokensIn,
+              tokensOut: result.tokensOut,
+              durationMs: Date.now() - start,
+              toolCalls: result.toolCallsLog.map(c => ({ name: c.name, ok: true })),
+              withdrawn: conc !== undefined,
+              withdrawnReason: conc?.reason,
+              withdrawnDeferTo: conc?.deferTo,
             };
-            this.emitEvent('chunk', data);
-          },
-        });
-        this.emitEvent('model-complete', { response });
-        return response;
+            if (resp.withdrawn) {
+              this.emitEvent('model-withdrawn', {
+                modelId: model.id,
+                reason: resp.withdrawnReason ?? '',
+                deferTo: resp.withdrawnDeferTo,
+              });
+            }
+            this.emitEvent('model-complete', { response: resp });
+            return resp;
+          } else {
+            const response = await streamModel({
+              model,
+              messages,
+              signal,
+              onDelta,
+            });
+            this.emitEvent('model-complete', { response });
+            return response;
+          }
+        } catch (err) {
+          const resp: ModelResponse = {
+            modelId: model.id,
+            content: contentSoFar,
+            tokensIn: 0,
+            tokensOut: 0,
+            durationMs: Date.now() - start,
+            error: err instanceof Error ? err.message : String(err),
+          };
+          this.emitEvent('model-complete', { response: resp });
+          return resp;
+        }
       })
     );
   }
@@ -258,8 +532,9 @@ export class AdversarialEngine extends EventEmitter {
   }
 
   private async runVoting(responses: ModelResponse[]): Promise<VotingResult> {
-    const succeeded = responses.filter(r => !r.error && r.content);
-    const candidateIds = succeeded.map(r => r.modelId);
+    // 候选 = 未失败 + 未退出
+    const candidates = responses.filter(r => !r.error && r.content && !r.withdrawn);
+    const candidateIds = candidates.map(r => r.modelId);
     if (candidateIds.length < 2) {
       return {
         votes: [],
@@ -271,13 +546,23 @@ export class AdversarialEngine extends EventEmitter {
       };
     }
 
-    const prompt = generateVotingPrompt({
+    const concessionList = this.concessions.list();
+    const concessionNote = concessionList.length > 0
+      ? '\n\n【主动认错的模型（不在评选候选中，但他们的诚实表态值得肯定）】\n' +
+        concessionList.map(c => `- ${c.modelId}: ${c.reason}${c.deferTo ? ` (defer→${c.deferTo})` : ''}`).join('\n')
+      : '';
+
+    const basePrompt = generateVotingPrompt({
       question: this.options.request.question,
-      candidates: succeeded,
+      candidates,
       candidateModels: this.modelMap,
     });
+    const prompt = basePrompt + concessionNote;
 
-    const tasks = succeeded.map(async r => {
+    // 投票者 = 全部未失败的（包括 withdrawn —— 他们承认错了但仍可作为评判者投别人）
+    const voters = responses.filter(r => !r.error);
+
+    const tasks = voters.map(async r => {
       const voterModel = this.modelMap.get(r.modelId);
       if (!voterModel) return null;
       try {

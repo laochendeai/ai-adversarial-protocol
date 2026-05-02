@@ -9,9 +9,10 @@ import { VoteView } from './VoteView';
 interface Props {
   run?: UIRunState;
   width: number;
+  rows?: number;
 }
 
-export function RunDetailView({ run, width }: Props) {
+export function RunDetailView({ run, width, rows }: Props) {
   if (!run) {
     return (
       <Box paddingX={1}>
@@ -22,6 +23,11 @@ export function RunDetailView({ run, width }: Props) {
 
   const modelIds = Object.keys(run.modelOutputs);
   const visibleIds = modelIds.length > 0 ? modelIds : [];
+  // Reserve roughly 14 rows for header, run list, phase indicator, challenges,
+  // votes, footer. Anything beyond that goes to per-model output, with a sane
+  // floor so panels remain useful even on small terminals.
+  const reserved = 14;
+  const maxContentRows = rows ? Math.max(6, rows - reserved) : 12;
 
   return (
     <Box flexDirection="column">
@@ -29,10 +35,23 @@ export function RunDetailView({ run, width }: Props) {
         <Text bold>📝 {run.question}</Text>
         <Box marginTop={1}>
           <PhaseIndicator phase={run.phase} />
+          {run.totalRounds && run.totalRounds > 1 && run.currentRound && (
+            <Text>
+              {'  '}
+              <Text bold color="magenta">
+                轮次 {run.currentRound}/{run.totalRounds}
+              </Text>
+            </Text>
+          )}
         </Box>
       </Box>
       {visibleIds.length > 0 && (
-        <ModelPanel run={run} modelIds={visibleIds} width={width} />
+        <ModelPanel
+          run={run}
+          modelIds={visibleIds}
+          width={width}
+          maxContentRows={maxContentRows}
+        />
       )}
       <ChallengeView challenges={run.challenges} />
       <VoteView result={run.voting} />

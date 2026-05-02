@@ -101,7 +101,7 @@ export async function callAnthropicProtocol(
     tokensOut = est.tokensOut;
   }
 
-  return { content: fullContent, tokensIn, tokensOut };
+  return { content: fullContent, tokensIn, tokensOut, toolCalls: [], finishReason: 'stop' };
 }
 
 export async function callAnthropicProtocolNonStream(
@@ -165,6 +165,8 @@ export async function callAnthropicProtocolNonStream(
     content,
     tokensIn: data.usage?.input_tokens ?? 0,
     tokensOut: data.usage?.output_tokens ?? 0,
+    toolCalls: [],
+    finishReason: 'stop',
   };
 }
 

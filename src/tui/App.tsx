@@ -5,40 +5,54 @@ import { useHub } from '@/tui/hooks/useHub';
 import { RunListPanel } from '@/tui/components/RunListPanel';
 import { RunDetailView } from '@/tui/components/RunDetailView';
 import { InputModal } from '@/tui/components/InputModal';
+import { DiscoverModal } from '@/tui/components/DiscoverModal';
+import { PreflightWarning } from '@/tui/components/PreflightWarning';
+import { ModelConfig } from '@/lib/types';
+import { preflightCheck, PreflightResult } from '@/engine/preflight';
 
 interface Props {
   hub: EngineHub;
   serverUrl?: string;
 }
 
+type Overlay =
+  | { kind: 'none' }
+  | { kind: 'input' }
+  | { kind: 'discover' }
+  | { kind: 'preflighting'; question: string; modelIds: string[] }
+  | { kind: 'preflight-warn'; question: string; result: PreflightResult }
+  | { kind: 'discover-error'; message: string };
+
 export function App({ hub, serverUrl }: Props) {
-  const { runs, order } = useHub(hub);
+  const { runs, order, config } = useHub(hub);
   const [selectedIdx, setSelectedIdx] = useState(0);
-  const [showInput, setShowInput] = useState(false);
+  const [overlay, setOverlay] = useState<Overlay>({ kind: 'none' });
   const { exit } = useApp();
   const { stdout } = useStdout();
 
-  const config = hub.getConfig();
   const cols = stdout?.columns ?? 100;
+  const rows = stdout?.rows ?? 30;
 
   const selectedId = order[selectedIdx] ?? order[0];
   const selectedRun = selectedId ? runs[selectedId] : undefined;
 
-  // Re-clamp selectedIdx when the run list shrinks (e.g. once we add "clear
-  // history"), so the cursor never points past the end.
   useEffect(() => {
     setSelectedIdx(i => Math.min(i, Math.max(0, order.length - 1)));
   }, [order.length]);
 
   useInput((input, key) => {
-    if (showInput) return;
+    if (overlay.kind !== 'none') return;
 
     if (input === 'q' || (key.ctrl && input === 'c')) {
       exit();
       return;
     }
     if (input === 'n') {
-      setShowInput(true);
+      setOverlay({ kind: 'input' });
+      return;
+    }
+    if (input === 'a') {
+      setOverlay({ kind: 'discover' });
       return;
     }
     if (key.upArrow) {
@@ -48,16 +62,41 @@ export function App({ hub, serverUrl }: Props) {
     }
   });
 
-  const handleSubmit = (question: string, modelIds: string[]) => {
-    setShowInput(false);
+  const startRunSafely = (question: string, models: ModelConfig[]) => {
     try {
       hub.startRun({
         question,
-        modelIds,
+        modelIds: models.map(m => m.id),
         source: 'tui-input',
       });
+    } catch {
+      /* errors will surface via run snapshot */
+    }
+  };
+
+  const handleSubmitQuestion = async (question: string, modelIds: string[]) => {
+    const selected = modelIds
+      .map(id => config.models.find(m => m.id === id))
+      .filter((m): m is ModelConfig => m !== undefined);
+    setOverlay({ kind: 'preflighting', question, modelIds });
+    const result = await preflightCheck(selected, { timeoutMs: 5000 });
+    if (result.failed.length === 0) {
+      setOverlay({ kind: 'none' });
+      startRunSafely(question, result.ok);
+      return;
+    }
+    setOverlay({ kind: 'preflight-warn', question, result });
+  };
+
+  const handleDiscoverSubmit = (newModels: ModelConfig[]) => {
+    try {
+      hub.addModelsAndSave(newModels);
+      // Modal stays open in 'success' stage so user can chain more endpoints.
     } catch (err) {
-      // 错误会在 run 列表中显示
+      setOverlay({
+        kind: 'discover-error',
+        message: err instanceof Error ? err.message : String(err),
+      });
     }
   };
 
@@ -79,7 +118,7 @@ export function App({ hub, serverUrl }: Props) {
           </Text>
         )}
         <Text dimColor>
-          {'  '}活跃: {activeCount} / 总: {totalRuns}
+          {'  '}活跃: {activeCount} / 总: {totalRuns} · 已配置模型: {config.models.length}
         </Text>
       </Box>
 
@@ -90,24 +129,80 @@ export function App({ hub, serverUrl }: Props) {
 
       <Box flexDirection="column" marginTop={1}>
         <Text bold>🔬 详情</Text>
-        <RunDetailView run={selectedRun} width={cols} />
+        <RunDetailView run={selectedRun} width={cols} rows={rows} />
       </Box>
 
       <Box marginTop={1} paddingX={1}>
         <Text dimColor>
-          [↑↓] 切换 run · [n] 新问题 · [q] 退出
+          [↑↓] 切换 run · [n] 新问题 · [a] 添加模型 · [q] 退出
         </Text>
       </Box>
 
-      {showInput && (
+      {overlay.kind === 'input' && (
         <Box marginTop={1}>
           <InputModal
             models={config.models}
-            onSubmit={handleSubmit}
-            onCancel={() => setShowInput(false)}
+            onSubmit={handleSubmitQuestion}
+            onCancel={() => setOverlay({ kind: 'none' })}
           />
+        </Box>
+      )}
+
+      {overlay.kind === 'discover' && (
+        <Box marginTop={1}>
+          <DiscoverModal
+            existingIds={config.models.map(m => m.id)}
+            onSubmit={handleDiscoverSubmit}
+            onCancel={() => setOverlay({ kind: 'none' })}
+          />
+        </Box>
+      )}
+
+      {overlay.kind === 'preflighting' && (
+        <Box marginTop={1} borderStyle="double" borderColor="yellow" paddingX={1}>
+          <Text>预检中… ({overlay.modelIds.length} 个模型)</Text>
+        </Box>
+      )}
+
+      {overlay.kind === 'preflight-warn' && (
+        <Box marginTop={1}>
+          <PreflightWarning
+            failed={overlay.result.failed}
+            okCount={overlay.result.ok.length}
+            onDropFailures={() => {
+              const q = overlay.question;
+              const models = overlay.result.ok;
+              setOverlay({ kind: 'none' });
+              startRunSafely(q, models);
+            }}
+            onAbort={() => setOverlay({ kind: 'none' })}
+            onContinueAnyway={() => {
+              const q = overlay.question;
+              const all = [...overlay.result.ok, ...overlay.result.failed
+                .map(f => config.models.find(m => m.id === f.modelId))
+                .filter((m): m is ModelConfig => m !== undefined)];
+              setOverlay({ kind: 'none' });
+              startRunSafely(q, all);
+            }}
+          />
+        </Box>
+      )}
+
+      {overlay.kind === 'discover-error' && (
+        <Box marginTop={1} borderStyle="double" borderColor="red" paddingX={1} flexDirection="column">
+          <Text bold color="red">添加失败</Text>
+          <Text>{overlay.message}</Text>
+          <Text dimColor>按 Enter 关闭</Text>
+          <DismissOnEnter onDismiss={() => setOverlay({ kind: 'none' })} />
         </Box>
       )}
     </Box>
   );
+}
+
+function DismissOnEnter({ onDismiss }: { onDismiss: () => void }) {
+  useInput((_input, key) => {
+    if (key.return || key.escape) onDismiss();
+  });
+  return null;
 }

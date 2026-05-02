@@ -4,12 +4,14 @@
 
 import { useEffect, useState } from 'react';
 import {
+  AppConfig,
   ChunkEventData,
   EngineEvent,
   RunCompleteEventData,
   RunFailedEventData,
   RunSnapshot,
   RunPhase,
+  RoundStartEventData,
   Challenge,
   VotingResult,
   ModelResponse,
@@ -32,6 +34,8 @@ export interface UIRunState {
   startedAt: number;
   finishedAt?: number;
   error?: string;
+  currentRound?: number;
+  totalRounds?: number;
 }
 
 function emptyRunState(snapshot: RunSnapshot): UIRunState {
@@ -53,9 +57,71 @@ function emptyRunState(snapshot: RunSnapshot): UIRunState {
 export function useHub(hub: EngineHub) {
   const [runs, setRuns] = useState<Record<string, UIRunState>>({});
   const [order, setOrder] = useState<string[]>([]);
+  const [config, setConfig] = useState<AppConfig>(() => hub.getConfig());
 
   useEffect(() => {
+    const onConfigChange = (next: AppConfig) => setConfig(next);
+    hub.on('config-change', onConfigChange);
+    return () => {
+      hub.off('config-change', onConfigChange);
+    };
+  }, [hub]);
+
+  useEffect(() => {
+    // Coalesce chunk events: many models streaming with thousands of small
+    // tokens cause one setState per delta and re-render the whole tree. Buffer
+    // deltas per (runId, modelId) and flush at ~20fps.
+    const pendingChunks = new Map<string, Map<string, string>>();
+    let flushTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const flush = () => {
+      flushTimer = null;
+      if (pendingChunks.size === 0) return;
+      // Snapshot and clear so further chunks during/after setState start a new
+      // batch instead of leaking into this one.
+      const drained: Array<[string, Array<[string, string]>]> = [];
+      for (const [runId, perModel] of pendingChunks) {
+        drained.push([runId, [...perModel]]);
+      }
+      pendingChunks.clear();
+
+      setRuns(prev => {
+        const next = { ...prev };
+        for (const [runId, entries] of drained) {
+          const existing = next[runId];
+          if (!existing) continue;
+          const merged = { ...existing.modelOutputs };
+          for (const [modelId, addition] of entries) {
+            merged[modelId] = (merged[modelId] ?? '') + addition;
+          }
+          next[runId] = { ...existing, modelOutputs: merged };
+        }
+        return next;
+      });
+    };
+
+    const scheduleFlush = () => {
+      if (flushTimer) return;
+      flushTimer = setTimeout(flush, 50);
+    };
+
     const handler = (event: EngineEvent) => {
+      if (event.type === 'chunk') {
+        const data = event.data as ChunkEventData;
+        let perRun = pendingChunks.get(event.runId);
+        if (!perRun) {
+          perRun = new Map();
+          pendingChunks.set(event.runId, perRun);
+        }
+        perRun.set(data.modelId, (perRun.get(data.modelId) ?? '') + data.delta);
+        scheduleFlush();
+        return;
+      }
+
+      // Non-chunk events: drain any pending chunks first so updates apply in
+      // order, then process synchronously.
+      if (pendingChunks.size > 0) flush();
+
       setRuns(prev => {
         const existing = prev[event.runId];
 
@@ -73,12 +139,16 @@ export function useHub(hub: EngineHub) {
 
         if (event.type === 'phase-change') {
           next.phase = (event.data as PhaseChangeEventData).phase;
-        } else if (event.type === 'chunk') {
-          const data = event.data as ChunkEventData;
-          next.modelOutputs = {
-            ...next.modelOutputs,
-            [data.modelId]: (next.modelOutputs[data.modelId] ?? '') + data.delta,
-          };
+        } else if (event.type === 'round-start') {
+          const data = event.data as RoundStartEventData;
+          next.currentRound = data.round;
+          next.totalRounds = data.totalRounds;
+          // Reset per-model output for the new round so the user sees the
+          // refined answers, not a cumulative blob.
+          if (data.round > 1) {
+            next.modelOutputs = {};
+            next.modelDone = {};
+          }
         } else if (event.type === 'model-complete') {
           const { response } = event.data as { response: ModelResponse };
           next.modelDone = { ...next.modelDone, [response.modelId]: true };
@@ -113,8 +183,12 @@ export function useHub(hub: EngineHub) {
     hub.on('engine-event', handler);
     return () => {
       hub.off('engine-event', handler);
+      if (flushTimer) {
+        clearTimeout(flushTimer);
+        flushTimer = null;
+      }
     };
   }, [hub]);
 
-  return { runs, order };
+  return { runs, order, config };
 }

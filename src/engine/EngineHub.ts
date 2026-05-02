@@ -16,7 +16,7 @@ import {
   RunSnapshot,
 } from '@/lib/types';
 import { AdversarialEngine } from './AdversarialEngine';
-import { getEnabledModels } from '@/config/loader';
+import { addModel, getEnabledModels, loadConfig, saveConfig } from '@/config/loader';
 
 export interface StartRunResult {
   runId: string;
@@ -45,10 +45,36 @@ export class EngineHub extends EventEmitter {
 
   setConfig(config: AppConfig) {
     this.config = config;
+    this.emit('config-change', config);
   }
 
   getConfig(): AppConfig {
     return this.config;
+  }
+
+  /**
+   * Reload config from disk and broadcast `config-change`.
+   * Called after external mutations (e.g. CLI in another shell).
+   */
+  reloadConfig(): AppConfig {
+    this.config = loadConfig(this.config.storageDir);
+    this.emit('config-change', this.config);
+    return this.config;
+  }
+
+  /**
+   * Append models to config, persist to disk, and broadcast `config-change`.
+   * Throws if any new model id collides with an existing one.
+   */
+  addModelsAndSave(models: ModelConfig[]): AppConfig {
+    let next = this.config;
+    for (const m of models) {
+      next = addModel(next, m);
+    }
+    saveConfig(next);
+    this.config = next;
+    this.emit('config-change', next);
+    return next;
   }
 
   /**
